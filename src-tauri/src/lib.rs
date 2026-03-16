@@ -1,5 +1,6 @@
 mod commands;
 mod rdp;
+mod renderer;
 mod store;
 mod utils;
 
