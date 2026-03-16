@@ -23,7 +23,11 @@ pub async fn test_tcp_connection(host: &str, port: u16, timeout_ms: u64) -> Resu
             Ok(false)
         }
         Err(_) => {
-            log::warn!("TCP connection to {} timed out after {}ms", addr, timeout_ms);
+            log::warn!(
+                "TCP connection to {} timed out after {}ms",
+                addr,
+                timeout_ms
+            );
             Ok(false)
         }
     }
@@ -31,7 +35,11 @@ pub async fn test_tcp_connection(host: &str, port: u16, timeout_ms: u64) -> Resu
 
 /// Measure TCP connection latency to a host:port.
 /// Returns Some(latency_ms) on success, None on failure/timeout.
-pub async fn measure_tcp_latency(host: &str, port: u16, timeout_ms: u64) -> Result<Option<u64>, String> {
+pub async fn measure_tcp_latency(
+    host: &str,
+    port: u16,
+    timeout_ms: u64,
+) -> Result<Option<u64>, String> {
     if host.trim().is_empty() {
         return Err("Host cannot be empty".to_string());
     }

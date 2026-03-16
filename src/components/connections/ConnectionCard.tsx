@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, useAnimationControls } from 'framer-motion';
 import {
@@ -13,6 +13,20 @@ import type { ConnectionConfig } from '../../types';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { useToastStore } from '../../stores/toastStore';
 import * as tauri from '../../lib/tauri';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 const DEFAULT_ACCENT = '#6366f1';
 
@@ -32,10 +46,8 @@ export function ConnectionCard({ connection, index, onEdit }: Props) {
   const addToast = useToastStore((s) => s.addToast);
   const [testStatus, setTestStatus] = useState<TestStatus>('unknown');
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
-  const [showMenu, setShowMenu] = useState(false);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [latencyVisible, setLatencyVisible] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
   const cardControls = useAnimationControls();
 
   // Measure latency on mount with a small random delay to stagger pings
@@ -126,7 +138,6 @@ export function ConnectionCard({ connection, index, onEdit }: Props) {
   };
 
   const handleDelete = async () => {
-    setShowMenu(false);
     await deleteConnection(connection.id);
   };
 
@@ -158,7 +169,7 @@ export function ConnectionCard({ connection, index, onEdit }: Props) {
       exit={{ opacity: 0, scale: 0.9, y: -10 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
       whileHover={{ y: -3 }}
-      className="relative rounded-xl overflow-hidden cursor-pointer group bg-[var(--color-surface-1)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all duration-200"
+      className="card-shadow group relative cursor-pointer overflow-hidden rounded-xl bg-card text-card-foreground ring-1 ring-foreground/10 transition-all duration-200 hover:ring-foreground/20"
       onClick={handleTest}
     >
       {/* Connecting spinner overlay */}
@@ -184,12 +195,15 @@ export function ConnectionCard({ connection, index, onEdit }: Props) {
         style={{ background: connection.colorAccent || DEFAULT_ACCENT }}
       />
 
-      <div className="p-5">
+      <div className="min-w-0 p-5">
         {/* Header: name + latency + menu */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <span
-              className={`shrink-0 w-2.5 h-2.5 rounded-full transition-colors ${testStatus === 'online' ? 'pulse-online' : ''}`}
+              className={cn(
+                'shrink-0 w-2.5 h-2.5 rounded-full transition-colors',
+                testStatus === 'online' && 'pulse-online'
+              )}
               style={{ background: statusColor }}
             />
             <h3 className="text-[15px] font-semibold text-[var(--color-text-primary)] truncate">
@@ -206,67 +220,66 @@ export function ConnectionCard({ connection, index, onEdit }: Props) {
                 scale: latencyVisible ? 1 : 0.7,
               }}
               transition={{ duration: 0.3, ease: 'easeOut' }}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-medium"
-              style={{
-                background: `${latencyColor}15`,
-                color: latencyColor,
-              }}
             >
-              <span
-                className="w-1.5 h-1.5 rounded-full"
-                style={{ background: latencyColor }}
-              />
-              {latencyMs !== null ? `${latencyMs}ms` : '...'}
+              <Badge
+                variant="outline"
+                className="gap-1.5 text-[11px] font-medium border-transparent"
+                style={{
+                  background: `${latencyColor}15`,
+                  color: latencyColor,
+                }}
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: latencyColor }}
+                />
+                {latencyMs !== null ? `${latencyMs}ms` : '...'}
+              </Badge>
             </motion.div>
 
             {/* Menu button */}
-            <div className="relative" ref={menuRef}>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMenu(!showMenu);
-                }}
-                className="no-drag p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-3)] transition-colors opacity-0 group-hover:opacity-100"
-              >
-                <MoreVertical size={14} />
-              </button>
-
-              {showMenu && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="absolute right-0 top-9 z-50 w-36 py-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] shadow-xl"
-                  onClick={(e) => e.stopPropagation()}
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="no-drag text-[var(--color-text-muted)] opacity-100 transition-opacity hover:text-[var(--color-text-secondary)] md:opacity-0 md:group-hover:opacity-100"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreVertical size={14} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={4}>Options</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                <DropdownMenuItem
+                  onClick={() => {
+                    onEdit(connection);
+                  }}
                 >
-                  <button
-                    onClick={() => {
-                      setShowMenu(false);
-                      onEdit(connection);
-                    }}
-                    className="flex items-center gap-2.5 w-full px-3.5 py-2 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text-primary)] transition-colors"
-                  >
-                    <Pencil size={12} /> Edit
-                  </button>
-                  <button
-                    onClick={handleDelete}
-                    className="flex items-center gap-2.5 w-full px-3.5 py-2 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
-                  >
-                    <Trash2 size={12} /> Delete
-                  </button>
-                </motion.div>
-              )}
-            </div>
+                  <Pencil size={12} /> Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={handleDelete}
+                >
+                  <Trash2 size={12} /> Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
         {/* Connection info */}
         <div className="space-y-1.5 mb-4">
-          <p className="text-[13px] text-[var(--color-text-secondary)] font-mono tracking-tight">
+          <p className="break-all text-[13px] font-mono tracking-tight text-[var(--color-text-secondary)]">
             {connection.host}:{connection.port}
           </p>
           {(connection.domain || connection.username) && (
-            <p className="text-xs text-[var(--color-text-muted)]">
+            <p className="truncate text-xs text-[var(--color-text-muted)]">
               {connection.domain ? `${connection.domain}\\` : ''}
               {connection.username}
             </p>
@@ -277,36 +290,48 @@ export function ConnectionCard({ connection, index, onEdit }: Props) {
         {connection.tags.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-4">
             {connection.tags.map((tag) => (
-              <span
+              <Badge
                 key={tag}
-                className="px-2.5 py-0.5 text-[11px] font-medium rounded-full bg-[var(--color-surface-3)] text-[var(--color-text-muted)]"
+                variant="secondary"
+                className="text-[11px] font-medium"
               >
                 {tag}
-              </span>
+              </Badge>
             ))}
           </div>
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-between pt-3 border-t border-[var(--color-border)]">
-          <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+        <div className="flex flex-col gap-3 border-t border-[var(--color-border)] pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
             <Clock size={12} />
-            <span>{relativeTime(connection.lastConnectedAt)}</span>
+            <span className="truncate">{relativeTime(connection.lastConnectedAt)}</span>
           </div>
 
           {/* Connect button - always visible */}
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleConnect();
-            }}
-            className="no-drag flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] transition-colors shadow-sm"
-          >
-            <Play size={12} fill="currentColor" />
-            Connect
-          </motion.button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <motion.div
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <Button
+                  size="sm"
+                  className="no-drag w-full gap-2 text-xs font-semibold shadow-sm sm:w-auto"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleConnect();
+                  }}
+                >
+                  <Play size={12} fill="currentColor" />
+                  Connect
+                </Button>
+              </motion.div>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={4}>
+              Connect to {connection.name}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </motion.div>

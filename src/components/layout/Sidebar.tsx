@@ -2,21 +2,19 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 const EXPANDED_WIDTH = 260;
 const COLLAPSED_WIDTH = 72;
-
-// Custom SVG icons
-function BoltIcon({ className }: { className?: string }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className={className}>
-      <path
-        d="M13 2L4.09 12.64a1 1 0 00.78 1.62H11l-1 7.74a.5.5 0 00.86.4L19.91 11.36a1 1 0 00-.78-1.62H13l1-7.74a.5.5 0 00-.86-.4z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
 
 function ConnectionsIcon({ size = 20, className }: { size?: number; className?: string }) {
   return (
@@ -129,95 +127,137 @@ export function Sidebar() {
       </div>
 
       {/* Divider */}
-      <div className="mx-4 mb-3 border-t border-[var(--color-border)]" />
+      <Separator className="mx-4 mb-3 w-auto" />
 
       {/* Navigation */}
-      <nav className="flex flex-col gap-1 px-4 flex-1">
-        {navItems.map((item) => {
-          const isActive =
-            item.path === '/'
-              ? location.pathname === '/'
-              : location.pathname.startsWith(item.path);
-          const Icon = item.icon;
+      <ScrollArea className="flex-1 px-4">
+        <nav className="flex flex-col gap-1">
+          {navItems.map((item) => {
+            const isActive =
+              item.path === '/'
+                ? location.pathname === '/'
+                : location.pathname.startsWith(item.path);
+            const Icon = item.icon;
 
-          return (
-            <button
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              className={`
-                relative flex items-center gap-3.5 px-3.5 py-3 rounded-xl transition-all duration-150 text-left
-                ${
-                  isActive
-                    ? 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text-primary)]'
-                }
-              `}
-            >
-              {isActive && (
-                <motion.div
-                  layoutId="sidebar-active"
-                  className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-[var(--color-accent)]"
-                  transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-                />
-              )}
-              <Icon size={20} className="shrink-0" />
-              <AnimatePresence mode="wait">
-                {!collapsed && (
-                  <motion.span
-                    initial={{ opacity: 0, width: 0 }}
-                    animate={{ opacity: 1, width: 'auto' }}
-                    exit={{ opacity: 0, width: 0 }}
-                    transition={{ duration: 0.15 }}
-                    className="text-[13px] font-semibold whitespace-nowrap overflow-hidden"
-                  >
-                    {item.label}
-                  </motion.span>
+            const button = (
+              <Button
+                key={item.path}
+                variant={isActive ? 'secondary' : 'ghost'}
+                className={cn(
+                  'relative w-full justify-start gap-3.5 px-3.5 py-3 h-auto rounded-xl transition-all duration-150',
+                  isActive && 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]',
                 )}
-              </AnimatePresence>
-            </button>
-          );
-        })}
+                onClick={() => navigate(item.path)}
+              >
+                {isActive && (
+                  <motion.div
+                    layoutId="sidebar-active"
+                    className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-[var(--color-accent)]"
+                    transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                  />
+                )}
+                <Icon size={20} className="shrink-0" />
+                <AnimatePresence mode="wait">
+                  {!collapsed && (
+                    <motion.span
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: 'auto' }}
+                      exit={{ opacity: 0, width: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="text-[13px] font-semibold whitespace-nowrap overflow-hidden"
+                    >
+                      {item.label}
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </Button>
+            );
 
-        {/* Active Sessions Badge */}
-        {sessionCount > 0 && (
-          <button
-            onClick={() => {
-              const activeId = useSessionStore.getState().activeSessionId;
-              if (activeId) navigate(`/session/${activeId}`);
-            }}
-            className="flex items-center gap-3.5 px-3.5 py-3 rounded-xl text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text-primary)] transition-all duration-150"
-          >
-            <div className="relative shrink-0">
-              <SessionsIcon size={20} />
-              <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center w-[18px] h-[18px] text-[10px] font-bold text-white bg-[var(--color-success)] rounded-full ring-2 ring-[var(--color-surface-1)]">
-                {sessionCount}
-              </span>
-            </div>
-            <AnimatePresence mode="wait">
-              {!collapsed && (
-                <motion.span
-                  initial={{ opacity: 0, width: 0 }}
-                  animate={{ opacity: 1, width: 'auto' }}
-                  exit={{ opacity: 0, width: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="text-[13px] font-semibold whitespace-nowrap overflow-hidden"
-                >
-                  Active Sessions
-                </motion.span>
-              )}
-            </AnimatePresence>
-          </button>
-        )}
-      </nav>
+            if (collapsed) {
+              return (
+                <Tooltip key={item.path}>
+                  <TooltipTrigger asChild>
+                    {button}
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={8}>
+                    {item.label}
+                  </TooltipContent>
+                </Tooltip>
+              );
+            }
+
+            return button;
+          })}
+
+          {/* Active Sessions Badge */}
+          {sessionCount > 0 && (() => {
+            const sessionButton = (
+              <Button
+                variant="ghost"
+                className="w-full justify-start gap-3.5 px-3.5 py-3 h-auto rounded-xl transition-all duration-150"
+                onClick={() => {
+                  const activeId = useSessionStore.getState().activeSessionId;
+                  if (activeId) navigate(`/session/${activeId}`);
+                }}
+              >
+                <div className="relative shrink-0">
+                  <SessionsIcon size={20} />
+                  <Badge
+                    className="absolute -top-1.5 -right-1.5 flex items-center justify-center w-[18px] h-[18px] p-0 text-[10px] font-bold bg-[var(--color-success)] ring-2 ring-[var(--color-surface-1)]"
+                  >
+                    {sessionCount}
+                  </Badge>
+                </div>
+                <AnimatePresence mode="wait">
+                  {!collapsed && (
+                    <motion.span
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: 'auto' }}
+                      exit={{ opacity: 0, width: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="text-[13px] font-semibold whitespace-nowrap overflow-hidden"
+                    >
+                      Active Sessions
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </Button>
+            );
+
+            if (collapsed) {
+              return (
+                <Tooltip key="sessions">
+                  <TooltipTrigger asChild>
+                    {sessionButton}
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={8}>
+                    Active Sessions ({sessionCount})
+                  </TooltipContent>
+                </Tooltip>
+              );
+            }
+
+            return <div key="sessions">{sessionButton}</div>;
+          })()}
+        </nav>
+      </ScrollArea>
 
       {/* Collapse Toggle */}
       <div className="px-4 py-4 border-t border-[var(--color-border)]">
-        <button
-          onClick={toggleCollapse}
-          className="flex items-center justify-center w-full py-2.5 rounded-xl text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-3)] transition-all duration-150"
-        >
-          {collapsed ? <CollapseRightIcon /> : <CollapseLeftIcon />}
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              className="w-full justify-center py-2.5 rounded-xl"
+              onClick={toggleCollapse}
+            >
+              {collapsed ? <CollapseRightIcon /> : <CollapseLeftIcon />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={8}>
+            {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          </TooltipContent>
+        </Tooltip>
       </div>
     </motion.aside>
   );

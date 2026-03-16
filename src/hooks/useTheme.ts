@@ -7,13 +7,18 @@ export function useTheme() {
 
   const applyTheme = useCallback((theme: 'system' | 'light' | 'dark') => {
     const root = document.documentElement;
+    let resolved: 'light' | 'dark';
 
     if (theme === 'system') {
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+      resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     } else {
-      root.setAttribute('data-theme', theme);
+      resolved = theme;
     }
+
+    // Set both data-theme (our custom) and class (shadcn uses .dark/.light)
+    root.setAttribute('data-theme', resolved);
+    root.classList.remove('light', 'dark');
+    root.classList.add(resolved);
   }, []);
 
   useEffect(() => {

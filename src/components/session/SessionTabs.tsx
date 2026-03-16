@@ -4,6 +4,8 @@ import { X, Plus, Monitor } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 import * as tauri from '../../lib/tauri';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 export function SessionTabs() {
   const navigate = useNavigate();
@@ -54,11 +56,12 @@ export function SessionTabs() {
               exit={{ opacity: 0, width: 0 }}
               transition={{ duration: 0.2 }}
               onClick={() => handleTabClick(session.id)}
-              className={`relative flex items-center gap-2 px-4 h-full text-xs font-medium whitespace-nowrap border-r border-[var(--color-border)] transition-colors ${
+              className={cn(
+                'relative flex items-center gap-2 px-4 h-full text-xs font-medium whitespace-nowrap border-r border-[var(--color-border)] transition-colors',
                 isActive
                   ? 'bg-[var(--color-surface-0)] text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-2)]'
-              }`}
+              )}
             >
               {isActive && (
                 <motion.div
@@ -68,24 +71,28 @@ export function SessionTabs() {
               )}
               <Monitor size={12} />
               <span>{getConnectionName(session.connectionId)}</span>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="h-4 w-4 p-0 rounded hover:bg-[var(--color-surface-3)]"
                 onClick={(e) => handleClose(e, session.id)}
-                className="p-0.5 rounded hover:bg-[var(--color-surface-3)] transition-colors"
               >
                 <X size={10} />
-              </button>
+              </Button>
             </motion.button>
           );
         })}
       </AnimatePresence>
 
       {/* New tab button */}
-      <button
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="shrink-0 rounded-none h-full text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
         onClick={() => navigate('/')}
-        className="flex items-center justify-center w-9 h-full text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
       >
         <Plus size={14} />
-      </button>
+      </Button>
     </div>
   );
 }

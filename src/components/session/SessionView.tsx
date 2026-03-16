@@ -3,7 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
 import { useRdpSession } from '../../hooks/useRdpSession';
+import { useClipboard } from '../../hooks/useClipboard';
 import { useConnectionStore } from '../../stores/connectionStore';
+import { useSessionStore } from '../../stores/sessionStore';
 import { SessionCanvas } from './SessionCanvas';
 import { SessionToolbar } from './SessionToolbar';
 import { SessionTabs } from './SessionTabs';
@@ -18,12 +20,13 @@ export function SessionView() {
   const {
     sessionId,
     status,
-    frame,
     fps,
     latency,
     bandwidth,
     reconnectAttempts,
     maxReconnectAttempts,
+    subscribeToFrames,
+    reportFramePresented,
     connect,
     disconnect,
     cancelReconnect,
@@ -35,6 +38,10 @@ export function SessionView() {
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const connectingRef = useRef(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useClipboard({ sessionId });
+  const sessionResolution = useSessionStore((s) =>
+    sessionId ? s.sessions.get(sessionId) : null
+  );
 
   // Connect on mount - id is always a connectionId
   useEffect(() => {
@@ -60,12 +67,12 @@ export function SessionView() {
     if (!sessionId) return;
     // Send Ctrl+Alt+Del key sequence
     const keys = [
-      { keyCode: 0x11, isDown: true },  // Ctrl down
-      { keyCode: 0x12, isDown: true },  // Alt down
-      { keyCode: 0x2e, isDown: true },  // Del down
-      { keyCode: 0x2e, isDown: false }, // Del up
-      { keyCode: 0x12, isDown: false }, // Alt up
-      { keyCode: 0x11, isDown: false }, // Ctrl up
+      { keyCode: 0x1d, isDown: true },
+      { keyCode: 0x38, isDown: true },
+      { keyCode: 0x153, isDown: true },
+      { keyCode: 0x153, isDown: false },
+      { keyCode: 0x38, isDown: false },
+      { keyCode: 0x1d, isDown: false },
     ];
     for (const key of keys) {
       tauri.sendKeyEvent(sessionId, key).catch(() => {});
@@ -121,9 +128,13 @@ export function SessionView() {
     (c) => c.id === id || (sessionId && c.id === id)
   );
   const hostname = connectionInfo?.host ?? 'Unknown';
-  const resolution = connectionInfo
-    ? `${connectionInfo.displayWidth ?? 1920}x${connectionInfo.displayHeight ?? 1080}`
-    : '1920x1080';
+  const surfaceWidth = sessionResolution?.width
+    ?? connectionInfo?.displayWidth
+    ?? 1920;
+  const surfaceHeight = sessionResolution?.height
+    ?? connectionInfo?.displayHeight
+    ?? 1080;
+  const resolution = `${surfaceWidth}x${surfaceHeight}`;
 
   return (
     <div className="flex flex-col h-full relative">
@@ -145,10 +156,13 @@ export function SessionView() {
 
         {/* Canvas */}
         <SessionCanvas
-          frame={frame}
+          subscribeToFrames={subscribeToFrames}
           status={status}
           reconnectAttempts={reconnectAttempts}
           maxReconnectAttempts={maxReconnectAttempts}
+          surfaceWidth={surfaceWidth}
+          surfaceHeight={surfaceHeight}
+          onFramePresented={reportFramePresented}
           onKeyDown={sendKey}
           onKeyUp={sendKey}
           onMouseMove={(e, rect) => sendMouse(e, 'move', rect)}

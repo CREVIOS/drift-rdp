@@ -7,6 +7,7 @@ import type {
   KeyEvent,
   MouseEvent as RdpMouseEvent,
 } from '../types';
+import type { FramePayload } from './frame-protocol';
 
 // ── Connection Management ───────────────────────────────────────────
 
@@ -63,7 +64,7 @@ export async function measureLatency(host: string, port: number): Promise<number
 
 // ── Session Management ──────────────────────────────────────────────
 
-export async function connect(connectionId: string, frameChannel: Channel<string>): Promise<string> {
+export async function connect(connectionId: string, frameChannel: Channel<FramePayload>): Promise<string> {
   return await invoke<string>('connect', { connectionId, frameChannel });
 }
 
@@ -104,7 +105,7 @@ export async function sendMouseEvent(sessionId: string, event: RdpMouseEvent): P
     sessionId,
     x: event.x,
     y: event.y,
-    button: event.button || null,
+    button: event.button ? String(event.button) : null,
     eventType: event.eventType,
   });
 }

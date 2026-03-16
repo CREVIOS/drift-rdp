@@ -20,39 +20,44 @@ const mockMouseEvent = (overrides: Partial<MouseEvent>) =>
 describe('mapKeyEvent', () => {
   it('maps letter keys correctly', () => {
     const result = mapKeyEvent(mockKeyEvent({ code: 'KeyA', type: 'keydown' }));
-    expect(result.keyCode).toBe(0x41);
+    expect(result.keyCode).toBe(0x1e);
     expect(result.isDown).toBe(true);
   });
 
   it('maps keyup events', () => {
     const result = mapKeyEvent(mockKeyEvent({ code: 'KeyA', type: 'keyup' }));
-    expect(result.keyCode).toBe(0x41);
+    expect(result.keyCode).toBe(0x1e);
     expect(result.isDown).toBe(false);
   });
 
   it('maps Enter key', () => {
     const result = mapKeyEvent(mockKeyEvent({ code: 'Enter', key: 'Enter' }));
-    expect(result.keyCode).toBe(0x0d);
+    expect(result.keyCode).toBe(0x1c);
   });
 
   it('maps F1 key', () => {
     const result = mapKeyEvent(mockKeyEvent({ code: 'F1', key: 'F1' }));
-    expect(result.keyCode).toBe(0x70);
+    expect(result.keyCode).toBe(0x3b);
   });
 
   it('maps ShiftLeft modifier', () => {
     const result = mapKeyEvent(mockKeyEvent({ code: 'ShiftLeft', key: 'Shift' }));
-    expect(result.keyCode).toBe(0x10);
+    expect(result.keyCode).toBe(0x2a);
   });
 
   it('maps ControlLeft modifier', () => {
     const result = mapKeyEvent(mockKeyEvent({ code: 'ControlLeft', key: 'Control' }));
-    expect(result.keyCode).toBe(0x11);
+    expect(result.keyCode).toBe(0x1d);
   });
 
   it('maps AltLeft modifier', () => {
     const result = mapKeyEvent(mockKeyEvent({ code: 'AltLeft', key: 'Alt' }));
-    expect(result.keyCode).toBe(0x12);
+    expect(result.keyCode).toBe(0x38);
+  });
+
+  it('marks extended keys in the encoded keyCode', () => {
+    const result = mapKeyEvent(mockKeyEvent({ code: 'Delete', key: 'Delete' }));
+    expect(result.keyCode).toBe(0x153);
   });
 });
 
@@ -81,6 +86,21 @@ describe('mapMouseEvent', () => {
     );
     expect(result.x).toBe(90);
     expect(result.y).toBe(180);
+  });
+
+  it('scales coordinates to the remote surface size', () => {
+    const result = mapMouseEvent(
+      mockMouseEvent({ clientX: 110, clientY: 70 }),
+      'move',
+      {
+        rect: { left: 10, top: 20, width: 200, height: 100 } as DOMRect,
+        surfaceWidth: 1920,
+        surfaceHeight: 1080,
+      }
+    );
+
+    expect(result.x).toBe(960);
+    expect(result.y).toBe(540);
   });
 
   it('uses clientX/clientY without rect', () => {

@@ -5,14 +5,29 @@ use ironrdp::connector::{self, ClientConnector, ConnectionResult, Credentials, S
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::TokioFramed;
 
+use crate::rdp::clipboard::SessionClipboardBackend;
 use crate::store::connections::ConnectionConfig;
 
 /// Commands that can be sent to a running session actor.
 #[derive(Debug)]
 pub enum SessionCommand {
-    SendKey { key_code: u32, is_down: bool },
-    SendMouse { x: i32, y: i32, button: Option<String>, event_type: String },
-    Resize { width: u32, height: u32 },
+    SendKey {
+        key_code: u32,
+        is_down: bool,
+    },
+    SendMouse {
+        x: i32,
+        y: i32,
+        button: Option<String>,
+        event_type: String,
+    },
+    Resize {
+        width: u32,
+        height: u32,
+    },
+    ClipboardWrite {
+        text: String,
+    },
     Disconnect,
 }
 
@@ -74,6 +89,12 @@ fn build_connector_config(
         Some(config.domain.clone())
     };
 
+    let performance_flags = PerformanceFlags::DISABLE_WALLPAPER
+        | PerformanceFlags::DISABLE_FULLWINDOWDRAG
+        | PerformanceFlags::DISABLE_MENUANIMATIONS
+        | PerformanceFlags::DISABLE_THEMING
+        | PerformanceFlags::DISABLE_CURSOR_SHADOW;
+
     connector::Config {
         credentials: Credentials::UsernamePassword {
             username: config.username.clone(),
@@ -108,7 +129,7 @@ fn build_connector_config(
         autologon: false,
         enable_audio_playback: false,
         pointer_software_rendering: true,
-        performance_flags: PerformanceFlags::default(),
+        performance_flags,
         hardware_id: None,
         license_cache: None,
         timezone_info: TimezoneInfo::default(),
@@ -145,6 +166,9 @@ pub async fn attempt_rdp_connection(
         .local_addr()
         .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
     let mut connector = ClientConnector::new(connector_config, client_addr);
+    connector.attach_static_channel(ironrdp::cliprdr::CliprdrClient::new(Box::new(
+        SessionClipboardBackend::new(),
+    )));
 
     let mut framed = TokioFramed::new(tcp_stream);
 
@@ -177,20 +201,18 @@ pub async fn attempt_rdp_connection(
     } else {
         &config.host
     };
-    log::info!("Using TLS server name: '{}' (original host: '{}')", tls_server_name, config.host);
+    log::info!(
+        "Using TLS server name: '{}' (original host: '{}')",
+        tls_server_name,
+        config.host
+    );
 
     // Run TLS in a separate spawned task so timeout can actually cancel it.
     // The TLS handshake can block the executor, preventing tokio::time::timeout from working.
     let tls_name = tls_server_name.to_string();
-    let tls_handle = tokio::spawn(async move {
-        do_tls_upgrade(initial_stream, &tls_name).await
-    });
+    let tls_handle = tokio::spawn(async move { do_tls_upgrade(initial_stream, &tls_name).await });
 
-    let tls_result = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        tls_handle,
-    )
-    .await;
+    let tls_result = tokio::time::timeout(std::time::Duration::from_secs(15), tls_handle).await;
 
     let (tls_stream, tls_cert) = match tls_result {
         Ok(Ok(Ok(result))) => {
@@ -222,7 +244,10 @@ pub async fn attempt_rdp_connection(
         }
     };
 
-    log::info!("Server public key extracted ({} bytes)", server_public_key.len());
+    log::info!(
+        "Server public key extracted ({} bytes)",
+        server_public_key.len()
+    );
 
     // Step 4: Mark as upgraded, create type-erased framed with leftover bytes
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
@@ -250,10 +275,7 @@ pub async fn attempt_rdp_connection(
         Ok(result) => result,
         Err(e) => {
             log::warn!("RDP connection finalize failed: {:?}", e);
-            return ConnectionOutcome::Failed(format!(
-                "RDP connection finalize failed: {}",
-                e
-            ));
+            return ConnectionOutcome::Failed(format!("RDP connection finalize failed: {}", e));
         }
     };
 
@@ -291,8 +313,8 @@ where
     let config = std::sync::Arc::new(config);
 
     log::info!("[TLS] Step 2: Parsing server name '{}'...", server_name);
-    let domain = RustlsServerName::try_from(server_name.to_owned())
-        .map_err(std::io::Error::other)?;
+    let domain =
+        RustlsServerName::try_from(server_name.to_owned()).map_err(std::io::Error::other)?;
     log::info!("[TLS] Step 3: ServerName parsed OK: {:?}", domain);
 
     log::info!("[TLS] Step 4: Starting TLS handshake (TlsConnector::connect)...");
@@ -325,31 +347,54 @@ struct NoCertVerifier;
 
 impl tokio_rustls::rustls::client::danger::ServerCertVerifier for NoCertVerifier {
     fn verify_server_cert(
-        &self, _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+        &self,
+        _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
         _: &[tokio_rustls::rustls::pki_types::CertificateDer<'_>],
-        _: &tokio_rustls::rustls::pki_types::ServerName<'_>, _: &[u8],
+        _: &tokio_rustls::rustls::pki_types::ServerName<'_>,
+        _: &[u8],
         _: tokio_rustls::rustls::pki_types::UnixTime,
-    ) -> Result<tokio_rustls::rustls::client::danger::ServerCertVerified, tokio_rustls::rustls::Error> {
+    ) -> Result<tokio_rustls::rustls::client::danger::ServerCertVerified, tokio_rustls::rustls::Error>
+    {
         Ok(tokio_rustls::rustls::client::danger::ServerCertVerified::assertion())
     }
     fn verify_tls12_signature(
-        &self, _: &[u8], _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+        &self,
+        _: &[u8],
+        _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
         _: &tokio_rustls::rustls::DigitallySignedStruct,
-    ) -> Result<tokio_rustls::rustls::client::danger::HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+    ) -> Result<
+        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+        tokio_rustls::rustls::Error,
+    > {
         Ok(tokio_rustls::rustls::client::danger::HandshakeSignatureValid::assertion())
     }
     fn verify_tls13_signature(
-        &self, _: &[u8], _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
+        &self,
+        _: &[u8],
+        _: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
         _: &tokio_rustls::rustls::DigitallySignedStruct,
-    ) -> Result<tokio_rustls::rustls::client::danger::HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+    ) -> Result<
+        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+        tokio_rustls::rustls::Error,
+    > {
         Ok(tokio_rustls::rustls::client::danger::HandshakeSignatureValid::assertion())
     }
     fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
         use tokio_rustls::rustls::SignatureScheme::*;
         vec![
-            RSA_PKCS1_SHA1, ECDSA_SHA1_Legacy, RSA_PKCS1_SHA256, ECDSA_NISTP256_SHA256,
-            RSA_PKCS1_SHA384, ECDSA_NISTP384_SHA384, RSA_PKCS1_SHA512, ECDSA_NISTP521_SHA512,
-            RSA_PSS_SHA256, RSA_PSS_SHA384, RSA_PSS_SHA512, ED25519, ED448,
+            RSA_PKCS1_SHA1,
+            ECDSA_SHA1_Legacy,
+            RSA_PKCS1_SHA256,
+            ECDSA_NISTP256_SHA256,
+            RSA_PKCS1_SHA384,
+            ECDSA_NISTP384_SHA384,
+            RSA_PKCS1_SHA512,
+            ECDSA_NISTP521_SHA512,
+            RSA_PSS_SHA256,
+            RSA_PSS_SHA384,
+            RSA_PSS_SHA512,
+            ED25519,
+            ED448,
         ]
     }
 }

@@ -1,30 +1,172 @@
 import type { KeyEvent, MouseEvent as RdpMouseEvent } from '../types';
 
-/**
- * Maps a browser KeyboardEvent to the RDP key event format.
- * Uses standard virtual key codes compatible with RDP protocol.
- */
+export interface MouseSurfaceBounds {
+  rect: DOMRect;
+  surfaceWidth: number;
+  surfaceHeight: number;
+}
+
+interface ScancodeMapping {
+  scancode: number;
+  extended?: boolean;
+}
+
+const EXTENDED_KEY_FLAG = 0x100;
+
+const SCANCODE_MAP: Record<string, ScancodeMapping> = {
+  KeyA: { scancode: 0x1e },
+  KeyB: { scancode: 0x30 },
+  KeyC: { scancode: 0x2e },
+  KeyD: { scancode: 0x20 },
+  KeyE: { scancode: 0x12 },
+  KeyF: { scancode: 0x21 },
+  KeyG: { scancode: 0x22 },
+  KeyH: { scancode: 0x23 },
+  KeyI: { scancode: 0x17 },
+  KeyJ: { scancode: 0x24 },
+  KeyK: { scancode: 0x25 },
+  KeyL: { scancode: 0x26 },
+  KeyM: { scancode: 0x32 },
+  KeyN: { scancode: 0x31 },
+  KeyO: { scancode: 0x18 },
+  KeyP: { scancode: 0x19 },
+  KeyQ: { scancode: 0x10 },
+  KeyR: { scancode: 0x13 },
+  KeyS: { scancode: 0x1f },
+  KeyT: { scancode: 0x14 },
+  KeyU: { scancode: 0x16 },
+  KeyV: { scancode: 0x2f },
+  KeyW: { scancode: 0x11 },
+  KeyX: { scancode: 0x2d },
+  KeyY: { scancode: 0x15 },
+  KeyZ: { scancode: 0x2c },
+  Digit1: { scancode: 0x02 },
+  Digit2: { scancode: 0x03 },
+  Digit3: { scancode: 0x04 },
+  Digit4: { scancode: 0x05 },
+  Digit5: { scancode: 0x06 },
+  Digit6: { scancode: 0x07 },
+  Digit7: { scancode: 0x08 },
+  Digit8: { scancode: 0x09 },
+  Digit9: { scancode: 0x0a },
+  Digit0: { scancode: 0x0b },
+  Escape: { scancode: 0x01 },
+  Backspace: { scancode: 0x0e },
+  Tab: { scancode: 0x0f },
+  Enter: { scancode: 0x1c },
+  NumpadEnter: { scancode: 0x1c, extended: true },
+  Space: { scancode: 0x39 },
+  Minus: { scancode: 0x0c },
+  Equal: { scancode: 0x0d },
+  BracketLeft: { scancode: 0x1a },
+  BracketRight: { scancode: 0x1b },
+  Backslash: { scancode: 0x2b },
+  IntlBackslash: { scancode: 0x56 },
+  Semicolon: { scancode: 0x27 },
+  Quote: { scancode: 0x28 },
+  Backquote: { scancode: 0x29 },
+  Comma: { scancode: 0x33 },
+  Period: { scancode: 0x34 },
+  Slash: { scancode: 0x35 },
+  CapsLock: { scancode: 0x3a },
+  F1: { scancode: 0x3b },
+  F2: { scancode: 0x3c },
+  F3: { scancode: 0x3d },
+  F4: { scancode: 0x3e },
+  F5: { scancode: 0x3f },
+  F6: { scancode: 0x40 },
+  F7: { scancode: 0x41 },
+  F8: { scancode: 0x42 },
+  F9: { scancode: 0x43 },
+  F10: { scancode: 0x44 },
+  F11: { scancode: 0x57 },
+  F12: { scancode: 0x58 },
+  PrintScreen: { scancode: 0x37, extended: true },
+  ScrollLock: { scancode: 0x46 },
+  Pause: { scancode: 0x45 },
+  Insert: { scancode: 0x52, extended: true },
+  Delete: { scancode: 0x53, extended: true },
+  Home: { scancode: 0x47, extended: true },
+  End: { scancode: 0x4f, extended: true },
+  PageUp: { scancode: 0x49, extended: true },
+  PageDown: { scancode: 0x51, extended: true },
+  ArrowUp: { scancode: 0x48, extended: true },
+  ArrowDown: { scancode: 0x50, extended: true },
+  ArrowLeft: { scancode: 0x4b, extended: true },
+  ArrowRight: { scancode: 0x4d, extended: true },
+  NumLock: { scancode: 0x45 },
+  NumpadDivide: { scancode: 0x35, extended: true },
+  NumpadMultiply: { scancode: 0x37 },
+  NumpadSubtract: { scancode: 0x4a },
+  NumpadAdd: { scancode: 0x4e },
+  NumpadDecimal: { scancode: 0x53 },
+  Numpad0: { scancode: 0x52 },
+  Numpad1: { scancode: 0x4f },
+  Numpad2: { scancode: 0x50 },
+  Numpad3: { scancode: 0x51 },
+  Numpad4: { scancode: 0x4b },
+  Numpad5: { scancode: 0x4c },
+  Numpad6: { scancode: 0x4d },
+  Numpad7: { scancode: 0x47 },
+  Numpad8: { scancode: 0x48 },
+  Numpad9: { scancode: 0x49 },
+  ShiftLeft: { scancode: 0x2a },
+  ShiftRight: { scancode: 0x36 },
+  ControlLeft: { scancode: 0x1d },
+  ControlRight: { scancode: 0x1d, extended: true },
+  AltLeft: { scancode: 0x38 },
+  AltRight: { scancode: 0x38, extended: true },
+  MetaLeft: { scancode: 0x5b, extended: true },
+  MetaRight: { scancode: 0x5c, extended: true },
+  ContextMenu: { scancode: 0x5d, extended: true },
+};
+
 export function mapKeyEvent(e: globalThis.KeyboardEvent): KeyEvent {
+  const mapping = SCANCODE_MAP[e.code] ?? null;
+  const keyCode =
+    mapping === null
+      ? 0
+      : mapping.scancode | (mapping.extended ? EXTENDED_KEY_FLAG : 0);
+
   return {
-    keyCode: mapBrowserKeyToVK(e.code, e.key),
+    keyCode,
     isDown: e.type === 'keydown',
   };
 }
 
-/**
- * Maps a browser MouseEvent to the RDP mouse event format.
- */
 export function mapMouseEvent(
   e: globalThis.MouseEvent,
   type: 'move' | 'down' | 'up' | 'scroll',
-  canvasRect?: DOMRect
+  bounds?: MouseSurfaceBounds | DOMRect
 ): RdpMouseEvent {
-  const x = canvasRect ? e.clientX - canvasRect.left : e.clientX;
-  const y = canvasRect ? e.clientY - canvasRect.top : e.clientY;
+  if (!bounds) {
+    return {
+      x: Math.round(e.clientX),
+      y: Math.round(e.clientY),
+      button: mapMouseButton(e.button),
+      eventType: type,
+    };
+  }
+
+  if (!('rect' in bounds)) {
+    return {
+      x: Math.round(e.clientX - bounds.left),
+      y: Math.round(e.clientY - bounds.top),
+      button: mapMouseButton(e.button),
+      eventType: type,
+    };
+  }
+
+  const relativeX = e.clientX - bounds.rect.left;
+  const relativeY = e.clientY - bounds.rect.top;
+  const scaleX = bounds.surfaceWidth / Math.max(bounds.rect.width, 1);
+  const scaleY = bounds.surfaceHeight / Math.max(bounds.rect.height, 1);
+  const maxX = Math.max(bounds.surfaceWidth - 1, 0);
+  const maxY = Math.max(bounds.surfaceHeight - 1, 0);
 
   return {
-    x: Math.round(x),
-    y: Math.round(y),
+    x: Math.max(0, Math.min(maxX, Math.round(relativeX * scaleX))),
+    y: Math.max(0, Math.min(maxY, Math.round(relativeY * scaleY))),
     button: mapMouseButton(e.button),
     eventType: type,
   };
@@ -32,72 +174,13 @@ export function mapMouseEvent(
 
 function mapMouseButton(button: number): number {
   switch (button) {
-    case 0: return 1; // Left
-    case 1: return 3; // Middle
-    case 2: return 2; // Right
-    default: return 0;
+    case 0:
+      return 1;
+    case 1:
+      return 3;
+    case 2:
+      return 2;
+    default:
+      return 0;
   }
-}
-
-/**
- * Map browser key codes to Windows Virtual Key codes.
- */
-function mapBrowserKeyToVK(code: string, key: string): number {
-  const map: Record<string, number> = {
-    // Letters
-    KeyA: 0x41, KeyB: 0x42, KeyC: 0x43, KeyD: 0x44,
-    KeyE: 0x45, KeyF: 0x46, KeyG: 0x47, KeyH: 0x48,
-    KeyI: 0x49, KeyJ: 0x4a, KeyK: 0x4b, KeyL: 0x4c,
-    KeyM: 0x4d, KeyN: 0x4e, KeyO: 0x4f, KeyP: 0x50,
-    KeyQ: 0x51, KeyR: 0x52, KeyS: 0x53, KeyT: 0x54,
-    KeyU: 0x55, KeyV: 0x56, KeyW: 0x57, KeyX: 0x58,
-    KeyY: 0x59, KeyZ: 0x5a,
-
-    // Numbers
-    Digit0: 0x30, Digit1: 0x31, Digit2: 0x32, Digit3: 0x33,
-    Digit4: 0x34, Digit5: 0x35, Digit6: 0x36, Digit7: 0x37,
-    Digit8: 0x38, Digit9: 0x39,
-
-    // Function keys
-    F1: 0x70, F2: 0x71, F3: 0x72, F4: 0x73,
-    F5: 0x74, F6: 0x75, F7: 0x76, F8: 0x77,
-    F9: 0x78, F10: 0x79, F11: 0x7a, F12: 0x7b,
-
-    // Modifiers
-    ShiftLeft: 0x10, ShiftRight: 0x10,
-    ControlLeft: 0x11, ControlRight: 0x11,
-    AltLeft: 0x12, AltRight: 0x12,
-    MetaLeft: 0x5b, MetaRight: 0x5c,
-
-    // Navigation
-    ArrowUp: 0x26, ArrowDown: 0x28, ArrowLeft: 0x25, ArrowRight: 0x27,
-    Home: 0x24, End: 0x23, PageUp: 0x21, PageDown: 0x22,
-
-    // Editing
-    Backspace: 0x08, Delete: 0x2e, Insert: 0x2d,
-    Enter: 0x0d, NumpadEnter: 0x0d,
-    Tab: 0x09, Escape: 0x1b, Space: 0x20,
-
-    // Punctuation
-    Comma: 0xbc, Period: 0xbe, Slash: 0xbf,
-    Semicolon: 0xba, Quote: 0xde,
-    BracketLeft: 0xdb, BracketRight: 0xdd,
-    Backslash: 0xdc, Backquote: 0xc0,
-    Minus: 0xbd, Equal: 0xbb,
-
-    // Lock keys
-    CapsLock: 0x14, NumLock: 0x90, ScrollLock: 0x91,
-
-    // Misc
-    PrintScreen: 0x2c, Pause: 0x13, ContextMenu: 0x5d,
-
-    // Numpad
-    Numpad0: 0x60, Numpad1: 0x61, Numpad2: 0x62, Numpad3: 0x63,
-    Numpad4: 0x64, Numpad5: 0x65, Numpad6: 0x66, Numpad7: 0x67,
-    Numpad8: 0x68, Numpad9: 0x69,
-    NumpadMultiply: 0x6a, NumpadAdd: 0x6b,
-    NumpadSubtract: 0x6d, NumpadDecimal: 0x6e, NumpadDivide: 0x6f,
-  };
-
-  return map[code] ?? key.charCodeAt(0);
 }

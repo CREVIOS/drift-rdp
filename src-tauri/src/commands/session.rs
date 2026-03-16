@@ -1,4 +1,7 @@
-use tauri::{State, ipc::Channel};
+use tauri::{
+    ipc::{Channel, InvokeResponseBody},
+    AppHandle, State,
+};
 
 use crate::rdp::client::SessionCommand;
 use crate::rdp::session::{SessionInfo, SessionManager, MAX_SESSIONS};
@@ -9,7 +12,8 @@ use crate::store::settings::SettingsStore;
 #[tauri::command]
 pub async fn connect(
     connection_id: String,
-    frame_channel: Channel<String>,
+    frame_channel: Channel<InvokeResponseBody>,
+    app: AppHandle,
     conn_store: State<'_, ConnectionStore>,
     cred_store: State<'_, CredentialStore>,
     session_mgr: State<'_, SessionManager>,
@@ -34,7 +38,11 @@ pub async fn connect(
     let password = match cred_store.get_password(&connection_id) {
         Ok(pw) => pw,
         Err(e) => {
-            log::warn!("Failed to retrieve password for connection {}: {}", connection_id, e);
+            log::warn!(
+                "Failed to retrieve password for connection {}: {}",
+                connection_id,
+                e
+            );
             None
         }
     };
@@ -51,7 +59,7 @@ pub async fn connect(
 
     // Create and spawn the session actor (with password for CredSSP/NLA)
     let session_id = session_mgr
-        .create_session(config, password, frame_channel, auto_reconnect)
+        .create_session(config, password, frame_channel, app, auto_reconnect)
         .await?;
 
     // Update last_connected_at on the connection
@@ -158,10 +166,9 @@ pub async fn resize_session(
     height: u32,
     session_mgr: State<'_, SessionManager>,
 ) -> Result<(), String> {
-    // Cap resolution at 8K to prevent OOM
-    if width > 7680 || height > 4320 || width == 0 || height == 0 {
+    if width > 8192 || height > 8192 || width == 0 || height == 0 {
         return Err(format!(
-            "Invalid resolution {}x{} (max 7680x4320)",
+            "Invalid resolution {}x{} (max 8192x8192)",
             width, height
         ));
     }

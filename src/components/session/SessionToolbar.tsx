@@ -10,6 +10,14 @@ import {
   Monitor,
 } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '@/components/ui/tooltip';
 
 interface Props {
   hostname: string;
@@ -62,7 +70,7 @@ export function SessionToolbar({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: -60, opacity: 0 }}
           transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-          className="absolute top-0 left-1/2 -translate-x-1/2 z-30 mt-2"
+          className="absolute top-0 left-1/2 z-30 mt-2 w-[min(calc(100%-1rem),42rem)] -translate-x-1/2"
           onMouseEnter={() => {
             if (timerRef.current) clearTimeout(timerRef.current);
           }}
@@ -70,82 +78,104 @@ export function SessionToolbar({
             timerRef.current = setTimeout(() => setVisible(false), 1500);
           }}
         >
-          <div className="glass flex items-center gap-1 px-2 py-1.5 rounded-xl shadow-2xl">
+          <div className="glass flex items-center gap-1 overflow-hidden rounded-xl px-2 py-1.5 shadow-2xl">
             {/* Connection info */}
-            <div className="flex items-center gap-2 px-3 py-1 border-r border-[var(--color-border)]">
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1">
               <Monitor size={12} className="text-[var(--color-accent)]" />
-              <span className="text-[11px] font-medium text-[var(--color-text-primary)]">
+              <span className="truncate text-[11px] font-medium text-[var(--color-text-primary)]">
                 {hostname}
               </span>
-              <span className="text-[10px] text-[var(--color-text-muted)] font-mono">
+              <span className="hidden text-[10px] font-mono text-[var(--color-text-muted)] sm:inline">
                 {resolution}
               </span>
             </div>
 
+            <Separator orientation="vertical" className="hidden h-5 sm:block" />
+
             {/* Stats */}
-            <div className="flex items-center gap-3 px-3 py-1 border-r border-[var(--color-border)] text-[10px] text-[var(--color-text-muted)]">
-              <span>{fps} FPS</span>
-              <span>{latency}ms</span>
+            <div className="hidden items-center gap-2 px-3 py-1 sm:flex">
+              <Badge variant="secondary" className="text-[10px] font-mono gap-1">
+                {fps} FPS
+              </Badge>
+              <Badge variant="secondary" className="text-[10px] font-mono gap-1">
+                {latency}ms
+              </Badge>
             </div>
 
+            <Separator orientation="vertical" className="h-5 shrink-0" />
+
             {/* Actions */}
-            <div className="flex items-center gap-0.5 px-1">
-              <ToolbarButton
-                icon={isFullscreen ? Minimize : Maximize}
-                label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-                onClick={onFullscreen}
-              />
-              <ToolbarButton
-                icon={Keyboard}
-                label="Ctrl+Alt+Del"
-                onClick={onCtrlAltDel}
-              />
-              <ToolbarButton
-                icon={BarChart3}
-                label="Performance HUD"
-                onClick={togglePerformanceHud}
-              />
-              <ToolbarButton
-                icon={Camera}
-                label="Screenshot"
-                onClick={onScreenshot}
-              />
-              <ToolbarButton
-                icon={LogOut}
-                label="Disconnect"
-                onClick={onDisconnect}
-                danger
-              />
+            <div className="flex shrink-0 items-center gap-0.5 px-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={onFullscreen}
+                  >
+                    {isFullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={4}>
+                  {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                </TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={onCtrlAltDel}
+                  >
+                    <Keyboard size={14} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={4}>Ctrl+Alt+Del</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={togglePerformanceHud}
+                  >
+                    <BarChart3 size={14} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={4}>Performance HUD</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={onScreenshot}
+                  >
+                    <Camera size={14} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={4}>Screenshot</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    size="icon-xs"
+                    onClick={onDisconnect}
+                  >
+                    <LogOut size={14} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={4}>Disconnect</TooltipContent>
+              </Tooltip>
             </div>
           </div>
         </motion.div>
       )}
     </AnimatePresence>
-  );
-}
-
-function ToolbarButton({
-  icon: Icon,
-  label,
-  onClick,
-  danger = false,
-}: {
-  icon: React.ComponentType<{ size: number; className?: string }>;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      title={label}
-      className={`p-2 rounded-lg transition-colors ${
-        danger
-          ? 'text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10'
-          : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-3)]'
-      }`}
-    >
-      <Icon size={14} />
-    </button>
   );
 }

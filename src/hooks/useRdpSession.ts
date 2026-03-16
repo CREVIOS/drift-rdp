@@ -1,50 +1,85 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Channel } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { SessionStatus } from '../types';
+import type { SessionInfo } from '../types';
 import { useSessionStore } from '../stores/sessionStore';
 import * as tauri from '../lib/tauri';
-import { mapKeyEvent, mapMouseEvent } from '../lib/input-mapper';
+import type { FramePayload } from '../lib/frame-protocol';
+import { toFrameBytes } from '../lib/frame-protocol';
+import {
+  mapKeyEvent,
+  mapMouseEvent,
+  type MouseSurfaceBounds,
+} from '../lib/input-mapper';
+
+type FrameListener = (frame: Uint8Array) => void;
 
 interface UseRdpSessionReturn {
   sessionId: string | null;
   status: SessionStatus;
-  frame: string | null;
   fps: number;
   latency: number;
   bandwidth: number;
   reconnectAttempts: number;
   maxReconnectAttempts: number;
+  subscribeToFrames: (listener: FrameListener) => () => void;
+  reportFramePresented: () => void;
   connect: (connectionId: string) => Promise<void>;
   disconnect: () => Promise<void>;
   cancelReconnect: () => Promise<void>;
   sendKey: (e: globalThis.KeyboardEvent) => void;
-  sendMouse: (e: globalThis.MouseEvent, type: 'move' | 'down' | 'up' | 'scroll', rect?: DOMRect) => void;
+  sendMouse: (
+    e: globalThis.MouseEvent,
+    type: 'move' | 'down' | 'up' | 'scroll',
+    bounds?: MouseSurfaceBounds
+  ) => void;
 }
 
 export function useRdpSession(): UseRdpSessionReturn {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<SessionStatus>('disconnected');
-  const [frame, setFrame] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
   const [latency, setLatency] = useState(0);
   const [bandwidth, setBandwidth] = useState(0);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [maxReconnectAttempts, setMaxReconnectAttempts] = useState(5);
 
-  const infoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameCountRef = useRef(0);
+  const byteCountRef = useRef(0);
+  const latestFpsRef = useRef(0);
+  const latestBandwidthRef = useRef(0);
   const fpsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const frameChannelRef = useRef<Channel<string> | null>(null);
+  const frameChannelRef = useRef<Channel<FramePayload> | null>(null);
+  const frameListenersRef = useRef<Set<FrameListener>>(new Set());
+  const sessionInfoUnlistenRef = useRef<(() => void) | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const pendingMouseMoveRef = useRef<ReturnType<typeof mapMouseEvent> | null>(null);
+  const mouseMoveScheduledRef = useRef(false);
 
   const addSession = useSessionStore((s) => s.addSession);
   const removeSession = useSessionStore((s) => s.removeSession);
   const updateSession = useSessionStore((s) => s.updateSession);
 
+  const subscribeToFrames = useCallback((listener: FrameListener) => {
+    frameListenersRef.current.add(listener);
+    return () => {
+      frameListenersRef.current.delete(listener);
+    };
+  }, []);
+
+  const reportFramePresented = useCallback(() => {
+    frameCountRef.current++;
+  }, []);
+
   const stopPolling = useCallback(() => {
     frameChannelRef.current = null;
-    if (infoIntervalRef.current) {
-      clearInterval(infoIntervalRef.current);
-      infoIntervalRef.current = null;
+    sessionIdRef.current = null;
+    pendingMouseMoveRef.current = null;
+    mouseMoveScheduledRef.current = false;
+    if (sessionInfoUnlistenRef.current) {
+      sessionInfoUnlistenRef.current();
+      sessionInfoUnlistenRef.current = null;
     }
     if (fpsIntervalRef.current) {
       clearInterval(fpsIntervalRef.current);
@@ -57,18 +92,23 @@ export function useRdpSession(): UseRdpSessionReturn {
       try {
         stopPolling();
         setStatus('connecting');
-        setFrame(null);
         setFps(0);
+        setBandwidth(0);
         frameCountRef.current = 0;
+        byteCountRef.current = 0;
+        latestFpsRef.current = 0;
+        latestBandwidthRef.current = 0;
 
-        const frameChannel = new Channel<string>((payload) => {
-          setFrame(payload);
-          frameCountRef.current++;
+        const frameChannel = new Channel<FramePayload>((payload) => {
+          const bytes = toFrameBytes(payload);
+          byteCountRef.current += bytes.byteLength;
+          frameListenersRef.current.forEach((listener) => listener(bytes));
         });
         frameChannelRef.current = frameChannel;
 
         const sid = await tauri.connect(connectionId, frameChannel);
         setSessionId(sid);
+        sessionIdRef.current = sid;
 
         addSession({
           id: sid,
@@ -86,35 +126,56 @@ export function useRdpSession(): UseRdpSessionReturn {
           lastError: null,
         });
 
+        const applySessionInfo = (info: SessionInfo) => {
+          const backendStatus = info.status;
+          const nextStatus =
+            typeof backendStatus === 'string'
+              ? (backendStatus as SessionStatus)
+              : 'error';
+
+          setLatency(info.latency);
+          setReconnectAttempts(info.reconnectAttempts);
+          setMaxReconnectAttempts(info.maxReconnectAttempts);
+          setStatus(nextStatus);
+          updateSession(sid, {
+            ...info,
+            status: nextStatus,
+            fps: latestFpsRef.current,
+            bandwidth: latestBandwidthRef.current,
+          });
+        };
+
         const syncSessionInfo = async () => {
           const info = await tauri.getSessionInfo(sid);
           if (!info) return;
-
-          setLatency(info.latency);
-          setBandwidth(info.bandwidth);
-          setReconnectAttempts(info.reconnectAttempts);
-          setMaxReconnectAttempts(info.maxReconnectAttempts);
-          updateSession(sid, info);
-
-          const backendStatus = info.status;
-          if (typeof backendStatus === 'string') {
-            setStatus(backendStatus as SessionStatus);
-          } else if (typeof backendStatus === 'object' && backendStatus !== null) {
-            setStatus('error');
-          }
+          applySessionInfo(info);
         };
 
         await syncSessionInfo();
-
-        // Poll session info every second
-        infoIntervalRef.current = setInterval(() => {
-          void syncSessionInfo();
-        }, 1000);
+        sessionInfoUnlistenRef.current = await listen<SessionInfo>(
+          `session-info-${sid}`,
+          (event) => {
+            applySessionInfo(event.payload);
+          }
+        );
 
         // Calculate FPS every second
         fpsIntervalRef.current = setInterval(() => {
-          setFps(frameCountRef.current);
+          const nextFps = frameCountRef.current;
+          const nextBandwidth = byteCountRef.current;
+
+          latestFpsRef.current = nextFps;
+          latestBandwidthRef.current = nextBandwidth;
+
+          setFps(nextFps);
+          setBandwidth(nextBandwidth);
+          updateSession(sid, {
+            fps: nextFps,
+            bandwidth: nextBandwidth,
+          });
+
           frameCountRef.current = 0;
+          byteCountRef.current = 0;
         }, 1000);
       } catch (e) {
         console.error('Connection failed:', e);
@@ -136,7 +197,6 @@ export function useRdpSession(): UseRdpSessionReturn {
     }
     setSessionId(null);
     setStatus('disconnected');
-    setFrame(null);
     setFps(0);
     setLatency(0);
     setBandwidth(0);
@@ -157,18 +217,46 @@ export function useRdpSession(): UseRdpSessionReturn {
     (e: globalThis.KeyboardEvent) => {
       if (!sessionId) return;
       const mapped = mapKeyEvent(e);
+      if (mapped.keyCode === 0) return;
       tauri.sendKeyEvent(sessionId, mapped).catch(() => {});
     },
     [sessionId]
   );
 
   const sendMouse = useCallback(
-    (e: globalThis.MouseEvent, type: 'move' | 'down' | 'up' | 'scroll', rect?: DOMRect) => {
-      if (!sessionId) return;
-      const mapped = mapMouseEvent(e, type, rect);
-      tauri.sendMouseEvent(sessionId, mapped).catch(() => {});
+    (
+      e: globalThis.MouseEvent,
+      type: 'move' | 'down' | 'up' | 'scroll',
+      bounds?: MouseSurfaceBounds
+    ) => {
+      const currentSessionId = sessionIdRef.current;
+      if (!currentSessionId) return;
+      const mapped = mapMouseEvent(e, type, bounds);
+      if (type === 'move') {
+        pendingMouseMoveRef.current = mapped;
+        if (mouseMoveScheduledRef.current) {
+          return;
+        }
+
+        mouseMoveScheduledRef.current = true;
+        requestAnimationFrame(() => {
+          mouseMoveScheduledRef.current = false;
+          const sid = sessionIdRef.current;
+          const nextMove = pendingMouseMoveRef.current;
+          pendingMouseMoveRef.current = null;
+
+          if (!sid || !nextMove) {
+            return;
+          }
+
+          tauri.sendMouseEvent(sid, nextMove).catch(() => {});
+        });
+        return;
+      }
+
+      tauri.sendMouseEvent(currentSessionId, mapped).catch(() => {});
     },
-    [sessionId]
+    []
   );
 
   // Cleanup on unmount
@@ -181,12 +269,13 @@ export function useRdpSession(): UseRdpSessionReturn {
   return {
     sessionId,
     status,
-    frame,
     fps,
     latency,
     bandwidth,
     reconnectAttempts,
     maxReconnectAttempts,
+    subscribeToFrames,
+    reportFramePresented,
     connect: connectFn,
     disconnect: disconnectFn,
     cancelReconnect: cancelReconnectFn,

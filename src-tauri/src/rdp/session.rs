@@ -2,11 +2,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::{mpsc, watch, Mutex};
 use uuid::Uuid;
 
 use crate::rdp::client::{attempt_rdp_connection, ConnectionOutcome, SessionCommand};
+use crate::rdp::clipboard::SessionClipboardBackend;
 use crate::rdp::display::FrameBuffer;
+use crate::rdp::frame_transport::{encode_full_frame_packet, encode_image_update_packet};
 use crate::store::connections::ConnectionConfig;
 
 pub const MAX_SESSIONS: usize = 10;
@@ -33,9 +36,9 @@ pub struct PerformanceMetrics {
 impl Default for PerformanceMetrics {
     fn default() -> Self {
         Self {
-            fps: 30.0,
+            fps: 0.0,
             latency_ms: 15,
-            bandwidth_kbps: 5000,
+            bandwidth_kbps: 0,
         }
     }
 }
@@ -67,8 +70,8 @@ pub struct SessionHandle {
     pub cmd_tx: mpsc::Sender<SessionCommand>,
     /// Receive the latest session info (lock-free reads via watch).
     pub info_rx: watch::Receiver<SessionInfo>,
-    /// Session ID.
-    pub id: String,
+    /// Receive the latest remote clipboard text.
+    pub clipboard_rx: watch::Receiver<Option<String>>,
     /// The tokio JoinHandle for the actor task.
     #[allow(dead_code)]
     pub task_handle: tokio::task::JoinHandle<()>,
@@ -87,10 +90,13 @@ struct SessionActor {
     height: u32,
     connected_at: Option<DateTime<Utc>>,
     frame_buffer: FrameBuffer,
-    jpeg_rgb_buffer: Vec<u8>,
+    frame_packet_scratch: Vec<u8>,
     cmd_rx: mpsc::Receiver<SessionCommand>,
     info_tx: watch::Sender<SessionInfo>,
-    frame_channel: tauri::ipc::Channel<String>,
+    clipboard_tx: watch::Sender<Option<String>>,
+    frame_channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+    app_handle: tauri::AppHandle,
+    local_clipboard_text: Option<String>,
     reconnect_attempts: u32,
     last_error: Option<String>,
     auto_reconnect: bool,
@@ -103,11 +109,15 @@ impl SessionActor {
         password: Option<String>,
         cmd_rx: mpsc::Receiver<SessionCommand>,
         info_tx: watch::Sender<SessionInfo>,
-        frame_channel: tauri::ipc::Channel<String>,
+        clipboard_tx: watch::Sender<Option<String>>,
+        frame_channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+        app_handle: tauri::AppHandle,
         auto_reconnect: bool,
     ) -> Self {
-        let width = config.display_width.unwrap_or(1920);
-        let height = config.display_height.unwrap_or(1080);
+        let (width, height) = normalize_remote_resolution(
+            config.display_width.unwrap_or(1920),
+            config.display_height.unwrap_or(1080),
+        );
 
         Self {
             id,
@@ -119,10 +129,13 @@ impl SessionActor {
             height,
             connected_at: None,
             frame_buffer: FrameBuffer::generate_mock_frame(width, height),
-            jpeg_rgb_buffer: Vec::with_capacity((width * height * 3) as usize),
+            frame_packet_scratch: Vec::with_capacity((width * height * 4) as usize),
             cmd_rx,
             info_tx,
+            clipboard_tx,
             frame_channel,
+            app_handle,
+            local_clipboard_text: None,
             reconnect_attempts: 0,
             last_error: None,
             auto_reconnect,
@@ -151,7 +164,182 @@ impl SessionActor {
 
     /// Publish the latest session info through the watch channel.
     fn publish_info(&self) {
-        let _ = self.info_tx.send(self.build_info());
+        let info = self.build_info();
+        let _ = self.info_tx.send(info.clone());
+        if let Err(error) = self
+            .app_handle
+            .emit(&format!("session-info-{}", self.id), info)
+        {
+            log::debug!(
+                "Failed to emit session info for session {}: {}",
+                self.id,
+                error
+            );
+        }
+    }
+
+    fn publish_remote_clipboard(&mut self, text: String) {
+        let _ = self.clipboard_tx.send(Some(text.clone()));
+        if let Err(error) = self
+            .app_handle
+            .emit(&format!("clipboard-{}", self.id), text)
+        {
+            log::warn!(
+                "Failed to emit clipboard event for session {}: {}",
+                self.id,
+                error
+            );
+        }
+    }
+
+    fn send_frame_packet(&mut self, packet: Vec<u8>) -> Result<(), DisconnectReason> {
+        match self
+            .frame_channel
+            .send(tauri::ipc::InvokeResponseBody::Raw(packet))
+        {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                log::warn!(
+                    "Failed to send frame packet for session {}: {}",
+                    self.id,
+                    error
+                );
+                self.last_error = Some(format!("Frame emit failed: {}", error));
+                Err(DisconnectReason::ConnectionLost)
+            }
+        }
+    }
+
+    fn send_mock_frame(&mut self) -> Result<(), DisconnectReason> {
+        let packet = encode_full_frame_packet(&self.frame_buffer);
+        self.send_frame_packet(packet)
+    }
+
+    async fn flush_clipboard_messages<W>(
+        &mut self,
+        active_stage: &mut ironrdp::session::ActiveStage,
+        writer: &mut W,
+    ) -> Result<(), DisconnectReason>
+    where
+        W: ironrdp_tokio::FramedWrite,
+    {
+        use ironrdp::cliprdr::{
+            backend::ClipboardMessage, Client as CliprdrRoleClient, CliprdrClient,
+            CliprdrSvcMessages,
+        };
+
+        let (pending_messages, remote_text_update) = {
+            let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() else {
+                return Ok(());
+            };
+            let Some(backend) = cliprdr.downcast_backend_mut::<SessionClipboardBackend>() else {
+                return Ok(());
+            };
+
+            (
+                backend.take_pending_messages(),
+                backend.take_remote_text_update(),
+            )
+        };
+
+        if let Some(text) = remote_text_update {
+            self.publish_remote_clipboard(text);
+        }
+
+        for message in pending_messages {
+            let svc_messages = {
+                let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() else {
+                    continue;
+                };
+
+                let result = match message {
+                    ClipboardMessage::SendInitiateCopy(formats) => cliprdr.initiate_copy(&formats),
+                    ClipboardMessage::SendFormatData(response) => {
+                        cliprdr.submit_format_data(response)
+                    }
+                    ClipboardMessage::SendInitiatePaste(format) => cliprdr.initiate_paste(format),
+                    ClipboardMessage::Error(error) => {
+                        log::warn!("Clipboard backend error for session {}: {}", self.id, error);
+                        continue;
+                    }
+                };
+
+                match result {
+                    Ok(messages) => Some(Vec::from(messages)),
+                    Err(error) => {
+                        log::warn!(
+                            "Failed to build clipboard response for session {}: {}",
+                            self.id,
+                            error
+                        );
+                        self.last_error = Some(format!("Clipboard error: {}", error));
+                        return Err(DisconnectReason::ConnectionLost);
+                    }
+                }
+            };
+
+            let Some(svc_messages) = svc_messages else {
+                continue;
+            };
+            if svc_messages.is_empty() {
+                continue;
+            }
+
+            let frame = match active_stage.process_svc_processor_messages(CliprdrSvcMessages::<
+                CliprdrRoleClient,
+            >::new(
+                svc_messages
+            )) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    log::warn!(
+                        "Failed to encode clipboard channel payload for session {}: {}",
+                        self.id,
+                        error
+                    );
+                    self.last_error = Some(format!("Clipboard encode error: {}", error));
+                    return Err(DisconnectReason::ConnectionLost);
+                }
+            };
+
+            if frame.is_empty() {
+                continue;
+            }
+
+            if let Err(error) = writer.write_all(&frame).await {
+                log::warn!(
+                    "Failed to write clipboard payload for session {}: {}",
+                    self.id,
+                    error
+                );
+                self.last_error = Some(format!("Clipboard write error: {}", error));
+                return Err(DisconnectReason::ConnectionLost);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn set_local_clipboard_text<W>(
+        &mut self,
+        active_stage: &mut ironrdp::session::ActiveStage,
+        writer: &mut W,
+        text: String,
+    ) -> Result<(), DisconnectReason>
+    where
+        W: ironrdp_tokio::FramedWrite,
+    {
+        use ironrdp::cliprdr::CliprdrClient;
+
+        self.local_clipboard_text = Some(text.clone());
+
+        if let Some(cliprdr) = active_stage.get_svc_processor_mut::<CliprdrClient>() {
+            if let Some(backend) = cliprdr.downcast_backend_mut::<SessionClipboardBackend>() {
+                backend.set_local_text(text);
+            }
+        }
+
+        self.flush_clipboard_messages(active_stage, writer).await
     }
 
     /// Main actor loop.
@@ -190,19 +378,14 @@ impl SessionActor {
                 self.publish_info();
 
                 // Run the real RDP session loop
-                let disconnect_reason =
-                    self.run_real_session_loop(connection_result, framed).await;
+                let disconnect_reason = self.run_real_session_loop(connection_result, framed).await;
 
                 if disconnect_reason == DisconnectReason::ConnectionLost && self.auto_reconnect {
                     self.run_reconnect_loop().await;
                 }
             }
             ConnectionOutcome::Failed(reason) => {
-                log::info!(
-                    "Session {} using mock frames (reason: {})",
-                    self.id,
-                    reason
-                );
+                log::info!("Session {} using mock frames (reason: {})", self.id, reason);
                 self.state = SessionState::Connected;
                 self.connected_at = Some(Utc::now());
                 self.publish_info();
@@ -231,23 +414,26 @@ impl SessionActor {
         connection_result: ironrdp::connector::ConnectionResult,
         framed: crate::rdp::client::TlsFramed,
     ) -> DisconnectReason {
-        use ironrdp::session::{ActiveStage, ActiveStageOutput};
-        use ironrdp::session::image::DecodedImage;
         use ironrdp::graphics::image_processing::PixelFormat;
+        use ironrdp::session::image::DecodedImage;
+        use ironrdp::session::{ActiveStage, ActiveStageOutput};
         use ironrdp_tokio::FramedWrite;
         let mut active_stage = ActiveStage::new(connection_result);
-        let mut image = DecodedImage::new(
-            PixelFormat::RgbA32,
-            self.width as u16,
-            self.height as u16,
-        );
+        let mut image =
+            DecodedImage::new(PixelFormat::RgbA32, self.width as u16, self.height as u16);
 
         // Split the framed stream for concurrent read/write
         let (mut reader, mut writer) = ironrdp_tokio::split_tokio_framed(framed);
 
-        // We'll emit frames at a throttled rate rather than on every single graphics update
-        let mut last_frame_emit = std::time::Instant::now();
-        let frame_interval = std::time::Duration::from_millis(16); // ~60 FPS cap
+        if let Some(text) = self.local_clipboard_text.clone() {
+            if self
+                .set_local_clipboard_text(&mut active_stage, &mut writer, text)
+                .await
+                .is_err()
+            {
+                return DisconnectReason::ConnectionLost;
+            }
+        }
 
         loop {
             tokio::select! {
@@ -275,7 +461,7 @@ impl SessionActor {
                         }
                     };
 
-                    let mut graphics_updated = false;
+                    let mut updated_regions = Vec::new();
                     for out in outputs {
                         match out {
                             ActiveStageOutput::ResponseFrame(frame) => {
@@ -287,8 +473,8 @@ impl SessionActor {
                                     }
                                 }
                             }
-                            ActiveStageOutput::GraphicsUpdate(_region) => {
-                                graphics_updated = true;
+                            ActiveStageOutput::GraphicsUpdate(region) => {
+                                updated_regions.push(region);
                             }
                             ActiveStageOutput::Terminate(reason) => {
                                 log::info!(
@@ -312,13 +498,23 @@ impl SessionActor {
                         }
                     }
 
-                    // Emit a frame to the frontend if we had a graphics update and enough time has passed
-                    if graphics_updated && last_frame_emit.elapsed() >= frame_interval {
-                        last_frame_emit = std::time::Instant::now();
-                        let frame_data = encode_frame_payload(&image, &mut self.jpeg_rgb_buffer);
-                        if let Err(e) = self.frame_channel.send(frame_data) {
-                            log::warn!("Failed to send frame on channel for session {}: {}", self.id, e);
+                    if !updated_regions.is_empty() {
+                        let packet = encode_image_update_packet(
+                            &image,
+                            &updated_regions,
+                            &mut self.frame_packet_scratch,
+                        );
+                        if self.send_frame_packet(packet).is_err() {
+                            return DisconnectReason::ConnectionLost;
                         }
+                    }
+
+                    if self
+                        .flush_clipboard_messages(&mut active_stage, &mut writer)
+                        .await
+                        .is_err()
+                    {
+                        return DisconnectReason::ConnectionLost;
                     }
                 }
 
@@ -347,18 +543,20 @@ impl SessionActor {
                             // Encode key event as FastPath input
                             use ironrdp::pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
 
-                            let scancode = key_code as u8;
-                            let event = if is_down {
-                                FastPathInputEvent::KeyboardEvent(
-                                    KeyboardFlags::empty(),
-                                    scancode,
-                                )
-                            } else {
-                                FastPathInputEvent::KeyboardEvent(
-                                    KeyboardFlags::RELEASE,
-                                    scancode,
-                                )
-                            };
+                            let scancode = (key_code & 0xff) as u8;
+                            if scancode == 0 {
+                                continue;
+                            }
+
+                            let mut flags = KeyboardFlags::empty();
+                            if !is_down {
+                                flags |= KeyboardFlags::RELEASE;
+                            }
+                            if (key_code & 0x100) != 0 {
+                                flags |= KeyboardFlags::EXTENDED;
+                            }
+
+                            let event = FastPathInputEvent::KeyboardEvent(flags, scancode);
 
                             match active_stage.process_fastpath_input(&mut image, &[event]) {
                                 Ok(outputs) => {
@@ -437,6 +635,7 @@ impl SessionActor {
                             }
                         }
                         Some(SessionCommand::Resize { width, height }) => {
+                            let (width, height) = normalize_remote_resolution(width, height);
                             log::info!("Session {} resize request to {}x{}", self.id, width, height);
                             self.width = width;
                             self.height = height;
@@ -454,6 +653,15 @@ impl SessionActor {
                                         log::warn!("Failed to encode resize: {}", e);
                                     }
                                 }
+                            }
+                        }
+                        Some(SessionCommand::ClipboardWrite { text }) => {
+                            if self
+                                .set_local_clipboard_text(&mut active_stage, &mut writer, text)
+                                .await
+                                .is_err()
+                            {
+                                return DisconnectReason::ConnectionLost;
                             }
                         }
                     }
@@ -482,9 +690,9 @@ impl SessionActor {
             );
 
             // Wait for the backoff delay, but check for disconnect commands
-            let should_cancel = self.wait_with_cancel(
-                std::time::Duration::from_secs(delay),
-            ).await;
+            let should_cancel = self
+                .wait_with_cancel(std::time::Duration::from_secs(delay))
+                .await;
 
             if should_cancel {
                 log::info!("Reconnect cancelled for session {}", self.id);
@@ -513,7 +721,11 @@ impl SessionActor {
                     self.width = connection_result.desktop_size.width as u32;
                     self.height = connection_result.desktop_size.height as u32;
                     self.publish_info();
-                    log::info!("Reconnected session {} (real RDP) on attempt {}", self.id, attempt);
+                    log::info!(
+                        "Reconnected session {} (real RDP) on attempt {}",
+                        self.id,
+                        attempt
+                    );
 
                     let reason = self.run_real_session_loop(connection_result, framed).await;
                     match reason {
@@ -527,7 +739,11 @@ impl SessionActor {
                     self.reconnect_attempts = 0;
                     self.last_error = None;
                     self.publish_info();
-                    log::info!("Reconnected session {} (mock fallback) on attempt {}", self.id, attempt);
+                    log::info!(
+                        "Reconnected session {} (mock fallback) on attempt {}",
+                        self.id,
+                        attempt
+                    );
 
                     let reason = self.run_mock_frame_loop().await;
                     match reason {
@@ -539,7 +755,10 @@ impl SessionActor {
         }
 
         // Exhausted all attempts
-        let msg = format!("Reconnection failed after {} attempts", MAX_RECONNECT_ATTEMPTS);
+        let msg = format!(
+            "Reconnection failed after {} attempts",
+            MAX_RECONNECT_ATTEMPTS
+        );
         self.state = SessionState::Error(msg.clone());
         self.last_error = Some(msg);
         self.reconnect_attempts = 0;
@@ -560,10 +779,14 @@ impl SessionActor {
                         Some(SessionCommand::Disconnect) | None => return true,
                         // Process other commands while waiting
                         Some(SessionCommand::Resize { width, height }) => {
+                            let (width, height) = normalize_remote_resolution(width, height);
                             self.width = width;
                             self.height = height;
                             self.frame_buffer = FrameBuffer::generate_mock_frame(width, height);
                             self.publish_info();
+                        }
+                        Some(SessionCommand::ClipboardWrite { text }) => {
+                            self.local_clipboard_text = Some(text);
                         }
                         _ => {} // Ignore key/mouse during reconnect
                     }
@@ -572,54 +795,59 @@ impl SessionActor {
         }
     }
 
-    /// Mock frame emission loop: emits frames at ~30 FPS and processes commands.
+    /// Mock session loop: sends an initial full frame and refreshes on resize.
     /// Returns the reason the loop ended.
     async fn run_mock_frame_loop(&mut self) -> DisconnectReason {
-        let mut frame_interval = tokio::time::interval(std::time::Duration::from_millis(16));
+        if self.send_mock_frame().is_err() {
+            return DisconnectReason::ConnectionLost;
+        }
 
         loop {
-            tokio::select! {
-                _ = frame_interval.tick() => {
-                    if self.state != SessionState::Connected {
-                        return DisconnectReason::ConnectionLost;
-                    }
-                    let frame_data = self.frame_buffer.to_base64_jpeg(75);
-                    if let Err(e) = self.frame_channel.send(frame_data) {
-                        log::warn!("Failed to send frame on channel for session {}: {}", self.id, e);
-                        self.last_error = Some(format!("Frame emit failed: {}", e));
+            match self.cmd_rx.recv().await {
+                Some(SessionCommand::Disconnect) | None => {
+                    log::info!("Session {} received disconnect command", self.id);
+                    self.state = SessionState::Disconnected;
+                    self.publish_info();
+                    return DisconnectReason::UserDisconnect;
+                }
+                Some(SessionCommand::Resize { width, height }) => {
+                    let (width, height) = normalize_remote_resolution(width, height);
+                    log::info!("Session {} resized to {}x{}", self.id, width, height);
+                    self.width = width;
+                    self.height = height;
+                    self.frame_buffer = FrameBuffer::generate_mock_frame(width, height);
+                    self.publish_info();
+                    if self.send_mock_frame().is_err() {
                         return DisconnectReason::ConnectionLost;
                     }
                 }
-                cmd = self.cmd_rx.recv() => {
-                    match cmd {
-                        Some(SessionCommand::Disconnect) | None => {
-                            log::info!("Session {} received disconnect command", self.id);
-                            self.state = SessionState::Disconnected;
-                            self.publish_info();
-                            return DisconnectReason::UserDisconnect;
-                        }
-                        Some(SessionCommand::Resize { width, height }) => {
-                            log::info!("Session {} resized to {}x{}", self.id, width, height);
-                            self.width = width;
-                            self.height = height;
-                            self.frame_buffer = FrameBuffer::generate_mock_frame(width, height);
-                            self.publish_info();
-                        }
-                        Some(SessionCommand::SendKey { key_code, is_down }) => {
-                            log::debug!(
-                                "Session {} key event: code={}, down={}",
-                                self.id, key_code, is_down
-                            );
-                            // TODO: Forward to IronRDP input channel when using real session
-                        }
-                        Some(SessionCommand::SendMouse { x, y, button, event_type }) => {
-                            log::debug!(
-                                "Session {} mouse event: ({},{}) btn={:?} type={}",
-                                self.id, x, y, button, event_type
-                            );
-                            // TODO: Forward to IronRDP input channel when using real session
-                        }
-                    }
+                Some(SessionCommand::SendKey { key_code, is_down }) => {
+                    log::debug!(
+                        "Session {} key event: code={}, down={}",
+                        self.id,
+                        key_code,
+                        is_down
+                    );
+                    // TODO: Forward to IronRDP input channel when using real session
+                }
+                Some(SessionCommand::SendMouse {
+                    x,
+                    y,
+                    button,
+                    event_type,
+                }) => {
+                    log::debug!(
+                        "Session {} mouse event: ({},{}) btn={:?} type={}",
+                        self.id,
+                        x,
+                        y,
+                        button,
+                        event_type
+                    );
+                    // TODO: Forward to IronRDP input channel when using real session
+                }
+                Some(SessionCommand::ClipboardWrite { text }) => {
+                    self.local_clipboard_text = Some(text);
                 }
             }
         }
@@ -632,41 +860,8 @@ enum DisconnectReason {
     ConnectionLost,
 }
 
-/// Encode a DecodedImage (RGBA pixel data) as a base64 JPEG for the frontend.
-fn encode_frame_payload(
-    image: &ironrdp::session::image::DecodedImage,
-    rgb_buffer: &mut Vec<u8>,
-) -> String {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-    use image::ImageEncoder;
-    use image::codecs::jpeg::JpegEncoder;
-    use std::io::Cursor;
-
-    let width = image.width() as u32;
-    let height = image.height() as u32;
-    let data = image.data();
-    let rgb_len = (width as usize) * (height as usize) * 3;
-
-    rgb_buffer.clear();
-    rgb_buffer.resize(rgb_len, 0);
-
-    for (rgba, rgb) in data.chunks_exact(4).zip(rgb_buffer.chunks_exact_mut(3)) {
-        rgb[0] = rgba[0];
-        rgb[1] = rgba[1];
-        rgb[2] = rgba[2];
-    }
-
-    let mut jpeg_bytes: Vec<u8> = Vec::with_capacity(rgb_len / 2);
-    {
-        let cursor = Cursor::new(&mut jpeg_bytes);
-        let encoder = JpegEncoder::new_with_quality(cursor, 75);
-        encoder
-            .write_image(rgb_buffer, width, height, image::ExtendedColorType::Rgb8)
-            .expect("Failed to encode JPEG");
-    }
-
-    BASE64.encode(jpeg_bytes)
+fn normalize_remote_resolution(width: u32, height: u32) -> (u32, u32) {
+    ironrdp::displaycontrol::pdu::MonitorLayoutEntry::adjust_display_size(width, height)
 }
 
 /// Manages all active sessions using lightweight handles.
@@ -690,7 +885,8 @@ impl SessionManager {
         &self,
         config: ConnectionConfig,
         password: Option<String>,
-        frame_channel: tauri::ipc::Channel<String>,
+        frame_channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+        app_handle: tauri::AppHandle,
         auto_reconnect: bool,
     ) -> Result<String, String> {
         let count = self.session_count().await;
@@ -702,8 +898,10 @@ impl SessionManager {
         }
 
         let session_id = Uuid::new_v4().to_string();
-        let width = config.display_width.unwrap_or(1920);
-        let height = config.display_height.unwrap_or(1080);
+        let (width, height) = normalize_remote_resolution(
+            config.display_width.unwrap_or(1920),
+            config.display_height.unwrap_or(1080),
+        );
 
         // Create channels
         let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
@@ -715,9 +913,9 @@ impl SessionManager {
             connection_name: config.name.clone(),
             host: config.host.clone(),
             status: SessionState::Connecting,
-            fps: 30.0,
+            fps: 0.0,
             latency: 15,
-            bandwidth: 5000,
+            bandwidth: 0,
             width,
             height,
             connected_at: None,
@@ -726,6 +924,7 @@ impl SessionManager {
             last_error: None,
         };
         let (info_tx, info_rx) = watch::channel(initial_info);
+        let (clipboard_tx, clipboard_rx) = watch::channel(None);
 
         // Create the actor
         let actor = SessionActor::new(
@@ -734,7 +933,9 @@ impl SessionManager {
             password,
             cmd_rx,
             info_tx,
+            clipboard_tx,
             frame_channel,
+            app_handle,
             auto_reconnect,
         );
 
@@ -745,7 +946,7 @@ impl SessionManager {
         let handle = SessionHandle {
             cmd_tx,
             info_rx,
-            id: session_id.clone(),
+            clipboard_rx,
             task_handle,
         };
 
@@ -787,6 +988,13 @@ impl SessionManager {
             .values()
             .map(|h| h.info_rx.borrow().clone())
             .collect()
+    }
+
+    pub async fn get_remote_clipboard(&self, session_id: &str) -> Option<String> {
+        let handles = self.handles.lock().await;
+        handles
+            .get(session_id)
+            .and_then(|handle| handle.clipboard_rx.borrow().clone())
     }
 
     /// Get a snapshot of the current frame for a session (generates mock frame on demand).

@@ -16,6 +16,7 @@ import { useTheme } from './hooks/useTheme';
 import { useKeyboard } from './hooks/useKeyboard';
 import { useSettingsStore } from './stores/settingsStore';
 import { useConnectionStore } from './stores/connectionStore';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 export default function App() {
   const fetchSettings = useSettingsStore((s) => s.fetchSettings);
@@ -44,54 +45,54 @@ export default function App() {
   useKeyboard({ onNewConnection: handleNewConnection, onShowShortcuts: handleShowShortcuts });
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[var(--color-surface-0)]">
-      {/* Titlebar */}
-      <Titlebar />
+    <TooltipProvider>
+      <div className="flex flex-col h-screen w-screen overflow-hidden bg-[var(--color-surface-0)]">
+        {/* Titlebar */}
+        <Titlebar />
 
-      {/* Main content area */}
-      <div className="flex flex-1 min-h-0">
-        {/* Sidebar */}
-        <Sidebar />
+        {/* Main content area */}
+        <div className="flex flex-1 min-h-0">
+          {/* Sidebar */}
+          <Sidebar />
 
-        {/* Page content */}
-        <main className="flex-1 min-w-0 overflow-hidden">
-          <ErrorBoundary>
-            <Routes>
-              <Route path="/" element={<ConnectionGrid />} />
-              <Route path="/session/:id" element={<SessionView />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Routes>
-          </ErrorBoundary>
-        </main>
-      </div>
+          {/* Page content */}
+          <main className="flex-1 min-w-0 overflow-hidden">
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/" element={<ConnectionGrid />} />
+                <Route path="/session/:id" element={<SessionView />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Routes>
+            </ErrorBoundary>
+          </main>
+        </div>
 
-      {/* Status Bar */}
-      <StatusBar />
+        {/* Status Bar */}
+        <StatusBar />
 
-      {/* Toast Notifications */}
-      <ToastContainer />
+        {/* Toast Notifications */}
+        <ToastContainer />
 
-      {/* Quick Connect Modal */}
-      <AnimatePresence>
+        {/* Quick Connect Modal */}
         <QuickConnect />
-      </AnimatePresence>
 
-      {/* New Connection Modal (from Cmd+N) */}
-      <AnimatePresence>
-        {showNewConnection && (
-          <ConnectionForm
-            connection={null}
-            onClose={() => setShowNewConnection(false)}
-          />
-        )}
-      </AnimatePresence>
+        {/* New Connection Modal (from Cmd+N) */}
+        <AnimatePresence>
+          {showNewConnection && (
+            <ConnectionForm
+              connection={null}
+              onClose={() => setShowNewConnection(false)}
+            />
+          )}
+        </AnimatePresence>
 
-      {/* Shortcut Overlay (Cmd+?) */}
-      <AnimatePresence>
-        {showShortcuts && (
-          <ShortcutOverlay onClose={() => setShowShortcuts(false)} />
-        )}
-      </AnimatePresence>
-    </div>
+        {/* Shortcut Overlay (Cmd+?) */}
+        <AnimatePresence>
+          {showShortcuts && (
+            <ShortcutOverlay onClose={() => setShowShortcuts(false)} />
+          )}
+        </AnimatePresence>
+      </div>
+    </TooltipProvider>
   );
 }

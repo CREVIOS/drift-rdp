@@ -87,14 +87,16 @@ pub async fn import_rdp_file(
 ) -> Result<ConnectionConfig, String> {
     let input = crate::store::connections::parse_rdp_file(&path)?;
     let conn = store.create(input).await?;
-    log::info!("Imported connection from RDP file: {} ({})", conn.name, conn.id);
+    log::info!(
+        "Imported connection from RDP file: {} ({})",
+        conn.name,
+        conn.id
+    );
     Ok(conn)
 }
 
 #[tauri::command]
-pub async fn import_ssh_config(
-    store: State<'_, ConnectionStore>,
-) -> Result<usize, String> {
+pub async fn import_ssh_config(store: State<'_, ConnectionStore>) -> Result<usize, String> {
     let hosts = crate::utils::ssh_config::parse_ssh_config()?;
     let mut count = 0;
     for host in hosts {

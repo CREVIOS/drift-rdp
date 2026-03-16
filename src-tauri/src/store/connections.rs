@@ -69,20 +69,18 @@ impl ConnectionStore {
         let file_path = data_dir.join("connections.json");
         let connections = if file_path.exists() {
             match std::fs::read_to_string(&file_path) {
-                Ok(data) => {
-                    match serde_json::from_str::<Vec<ConnectionConfig>>(&data) {
-                        Ok(list) => {
-                            let map: HashMap<String, ConnectionConfig> =
-                                list.into_iter().map(|c| (c.id.clone(), c)).collect();
-                            log::info!("Loaded {} connections from disk", map.len());
-                            map
-                        }
-                        Err(e) => {
-                            log::error!("Failed to parse connections file: {}", e);
-                            HashMap::new()
-                        }
+                Ok(data) => match serde_json::from_str::<Vec<ConnectionConfig>>(&data) {
+                    Ok(list) => {
+                        let map: HashMap<String, ConnectionConfig> =
+                            list.into_iter().map(|c| (c.id.clone(), c)).collect();
+                        log::info!("Loaded {} connections from disk", map.len());
+                        map
                     }
-                }
+                    Err(e) => {
+                        log::error!("Failed to parse connections file: {}", e);
+                        HashMap::new()
+                    }
+                },
                 Err(e) => {
                     log::error!("Failed to read connections file: {}", e);
                     HashMap::new()
@@ -135,7 +133,11 @@ impl ConnectionStore {
         Ok(config)
     }
 
-    pub async fn update(&self, id: &str, input: ConnectionInput) -> Result<Option<ConnectionConfig>, String> {
+    pub async fn update(
+        &self,
+        id: &str,
+        input: ConnectionInput,
+    ) -> Result<Option<ConnectionConfig>, String> {
         let mut conns = self.connections.lock().await;
         if let Some(existing) = conns.get_mut(id) {
             existing.name = input.name;
@@ -199,12 +201,14 @@ impl ConnectionStore {
 /// Parse a .rdp file and extract connection info.
 pub fn parse_rdp_file(path: &str) -> Result<ConnectionInput, String> {
     // File size check (max 1MB)
-    let metadata = std::fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    let metadata =
+        std::fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
     if metadata.len() > 1_048_576 {
         return Err("RDP file exceeds maximum size of 1MB".to_string());
     }
 
-    let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let mut host = String::new();
     let mut port: u16 = 3389;
@@ -404,7 +408,11 @@ mod tests {
             display_height: None,
             password: None,
         };
-        let updated = store.update(&created.id, update_input).await.unwrap().unwrap();
+        let updated = store
+            .update(&created.id, update_input)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.name, "New");
         assert_eq!(updated.host, "new-host");
         assert_eq!(updated.port, 3390);

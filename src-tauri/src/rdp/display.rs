@@ -1,7 +1,7 @@
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use image::{codecs::png::PngEncoder, ImageEncoder};
 use std::io::Cursor;
-use image::{ImageEncoder, codecs::jpeg::JpegEncoder, codecs::png::PngEncoder};
 
 /// Raw frame buffer holding pixel data.
 #[derive(Debug, Clone)]
@@ -70,34 +70,15 @@ impl FrameBuffer {
             let cursor = Cursor::new(&mut png_bytes);
             let encoder = PngEncoder::new(cursor);
             encoder
-                .write_image(&self.data, self.width, self.height, image::ExtendedColorType::Rgba8)
+                .write_image(
+                    &self.data,
+                    self.width,
+                    self.height,
+                    image::ExtendedColorType::Rgba8,
+                )
                 .expect("Failed to encode PNG");
         }
         BASE64.encode(&png_bytes)
-    }
-
-    /// Encode the frame buffer as a base64-encoded JPEG image.
-    pub fn to_base64_jpeg(&self, quality: u8) -> String {
-        let mut rgb_bytes = Vec::with_capacity((self.width * self.height * 3) as usize);
-        for rgba in self.data.chunks_exact(4) {
-            rgb_bytes.extend_from_slice(&rgba[..3]);
-        }
-
-        let mut jpeg_bytes = Vec::with_capacity((self.width * self.height) as usize);
-        {
-            let cursor = Cursor::new(&mut jpeg_bytes);
-            let encoder = JpegEncoder::new_with_quality(cursor, quality);
-            encoder
-                .write_image(
-                    &rgb_bytes,
-                    self.width,
-                    self.height,
-                    image::ExtendedColorType::Rgb8,
-                )
-                .expect("Failed to encode JPEG");
-        }
-
-        BASE64.encode(&jpeg_bytes)
     }
 
     /// Encode the frame buffer as a base64-encoded BMP image.
@@ -216,8 +197,14 @@ mod tests {
         let b64 = fb.to_base64_png();
         let decoded = BASE64.decode(&b64).expect("Invalid base64");
         // Verify PNG signature (first 8 bytes)
-        assert_eq!(&decoded[0..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        assert_eq!(
+            &decoded[0..8],
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        );
         // PNG should be smaller than raw RGBA data for non-trivial images
-        assert!(decoded.len() < fb.data.len(), "PNG should compress the data");
+        assert!(
+            decoded.len() < fb.data.len(),
+            "PNG should compress the data"
+        );
     }
 }

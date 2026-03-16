@@ -27,8 +27,7 @@ pub fn run() {
                 .expect("Failed to resolve app data directory");
 
             // Ensure the data directory exists
-            std::fs::create_dir_all(&data_dir)
-                .expect("Failed to create app data directory");
+            std::fs::create_dir_all(&data_dir).expect("Failed to create app data directory");
 
             log::info!("App data directory: {:?}", data_dir);
 

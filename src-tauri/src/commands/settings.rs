@@ -3,9 +3,7 @@ use tauri::State;
 use crate::store::settings::{AppSettings, SettingsStore};
 
 #[tauri::command]
-pub async fn get_settings(
-    store: State<'_, SettingsStore>,
-) -> Result<AppSettings, String> {
+pub async fn get_settings(store: State<'_, SettingsStore>) -> Result<AppSettings, String> {
     Ok(store.get().await)
 }
 
