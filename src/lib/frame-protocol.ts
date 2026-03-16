@@ -15,14 +15,52 @@ export interface FramePacket {
   rects: FrameRect[];
 }
 
+export interface H264FramePacket {
+  kind: 'h264';
+  surfaceWidth: number;
+  surfaceHeight: number;
+  h264Data: Uint8Array;
+}
+
 const PACKET_KIND_FULL_FRAME = 1;
 const PACKET_KIND_DIRTY_RECTS = 2;
+const PACKET_KIND_H264 = 3;
 const PACKET_HEADER_LEN = 7;
 const RECT_HEADER_LEN = 8;
 const BYTES_PER_PIXEL = 4;
 
 export function toFrameBytes(payload: FramePayload): Uint8Array {
   return payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+}
+
+/**
+ * Try to parse a payload as an H.264 frame packet (kind=3).
+ * Returns null if the packet is not H.264.
+ *
+ * H.264 packet layout:
+ *   [kind=3 (1 byte)] [width (2 bytes LE)] [height (2 bytes LE)]
+ *   [data_len (4 bytes LE)] [h264_data...]
+ */
+export function tryParseH264Packet(payload: FramePayload): H264FramePacket | null {
+  const bytes = toFrameBytes(payload);
+  if (bytes.byteLength < 9) return null;
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const kindValue = view.getUint8(0);
+
+  if (kindValue !== PACKET_KIND_H264) return null;
+
+  const surfaceWidth = view.getUint16(1, true);
+  const surfaceHeight = view.getUint16(3, true);
+  const dataLen = view.getUint32(5, true);
+  const h264Data = bytes.subarray(9, 9 + dataLen);
+
+  return {
+    kind: 'h264',
+    surfaceWidth,
+    surfaceHeight,
+    h264Data,
+  };
 }
 
 export function parseFramePacket(payload: FramePayload): FramePacket {

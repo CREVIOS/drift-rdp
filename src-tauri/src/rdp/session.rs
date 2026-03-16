@@ -9,7 +9,8 @@ use uuid::Uuid;
 use crate::rdp::client::{attempt_rdp_connection, ConnectionOutcome, SessionCommand};
 use crate::rdp::clipboard::SessionClipboardBackend;
 use crate::rdp::display::FrameBuffer;
-use crate::rdp::frame_transport::{encode_full_frame_packet, encode_image_update_packet};
+use crate::rdp::frame_transport::{encode_full_frame_packet, encode_h264_packet, encode_image_update_packet};
+use crate::renderer::h264_encoder::H264FrameEncoder;
 use crate::store::connections::ConnectionConfig;
 
 pub const MAX_SESSIONS: usize = 10;
@@ -100,6 +101,7 @@ struct SessionActor {
     reconnect_attempts: u32,
     last_error: Option<String>,
     auto_reconnect: bool,
+    h264_encoder: Option<H264FrameEncoder>,
 }
 
 impl SessionActor {
@@ -118,6 +120,18 @@ impl SessionActor {
             config.display_width.unwrap_or(1920),
             config.display_height.unwrap_or(1080),
         );
+
+        // Try to create the H.264 encoder; fall back to None if it fails
+        let h264_encoder = match H264FrameEncoder::new(width, height) {
+            Ok(enc) => {
+                log::info!("H.264 encoder initialized for {}x{}", width, height);
+                Some(enc)
+            }
+            Err(e) => {
+                log::warn!("Failed to initialize H.264 encoder, will use raw RGBA: {}", e);
+                None
+            }
+        };
 
         Self {
             id,
@@ -139,6 +153,7 @@ impl SessionActor {
             reconnect_attempts: 0,
             last_error: None,
             auto_reconnect,
+            h264_encoder,
         }
     }
 
@@ -210,7 +225,47 @@ impl SessionActor {
         }
     }
 
+    /// Try to send a frame as H.264. Returns Ok(true) if sent, Ok(false) if encoder unavailable.
+    fn try_send_h264_frame(
+        &mut self,
+        rgba_data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<bool, DisconnectReason> {
+        let encoder = match self.h264_encoder.as_mut() {
+            Some(enc) => enc,
+            None => return Ok(false),
+        };
+
+        match encoder.encode_rgba(rgba_data, width, height) {
+            Ok(h264_data) => {
+                if h264_data.is_empty() {
+                    return Ok(false);
+                }
+                let packet = encode_h264_packet(width as u16, height as u16, &h264_data);
+                self.send_frame_packet(packet)?;
+                Ok(true)
+            }
+            Err(e) => {
+                log::warn!("H.264 encode failed, falling back to raw RGBA: {}", e);
+                // Disable H.264 encoder on failure
+                self.h264_encoder = None;
+                Ok(false)
+            }
+        }
+    }
+
     fn send_mock_frame(&mut self) -> Result<(), DisconnectReason> {
+        // Try H.264 encoding first for the mock frame
+        let w = self.frame_buffer.width;
+        let h = self.frame_buffer.height;
+        // We need to clone data to avoid borrow conflict with self
+        let rgba_data = self.frame_buffer.data.clone();
+        if self.try_send_h264_frame(&rgba_data, w, h)? {
+            return Ok(());
+        }
+
+        // Fall back to raw RGBA
         let packet = encode_full_frame_packet(&self.frame_buffer);
         self.send_frame_packet(packet)
     }

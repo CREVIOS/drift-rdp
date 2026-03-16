@@ -40,6 +40,7 @@ wgpu = "24"
 winit = "0.30"
 pollster = "0.4"
 raw-window-handle = "0.6"
+openh264 = "0.6"
 
 [dev-dependencies]
 tempfile = "3"
