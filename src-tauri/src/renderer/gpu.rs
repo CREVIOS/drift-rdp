@@ -21,13 +21,15 @@ impl GpuRenderer {
     pub async fn new(
         window: Arc<winit::window::Window>,
         shared_frame: Arc<SharedFrame>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
-        let surface = instance.create_surface(window.clone()).unwrap();
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| format!("Failed to create GPU surface: {}", e))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -36,7 +38,7 @@ impl GpuRenderer {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("Failed to find GPU adapter");
+            .ok_or_else(|| "No GPU adapter found".to_string())?;
 
         let (device, queue) = adapter
             .request_device(
@@ -49,7 +51,7 @@ impl GpuRenderer {
                 None,
             )
             .await
-            .expect("Failed to create GPU device");
+            .map_err(|e| format!("Failed to create GPU device: {}", e))?;
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -60,15 +62,25 @@ impl GpuRenderer {
             .copied()
             .unwrap_or(surface_caps.formats[0]);
 
+        // Prefer Mailbox (lowest latency) with fallback to AutoVsync
+        let present_mode = if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::AutoVsync
+        };
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &surface_config);
 
@@ -144,7 +156,7 @@ impl GpuRenderer {
             cache: None,
         });
 
-        Self {
+        Ok(Self {
             device,
             queue,
             surface,
@@ -157,7 +169,7 @@ impl GpuRenderer {
             current_width: 0,
             current_height: 0,
             shared_frame,
-        }
+        })
     }
 
     pub fn resize(&mut self, new_width: u32, new_height: u32) {
@@ -170,9 +182,9 @@ impl GpuRenderer {
 
     /// Upload new frame data to the GPU texture if dirty, then render.
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        // Check for new frame data
-        if let Some((w, h, data, _version)) = self.shared_frame.read_if_dirty() {
-            self.upload_texture(w, h, &data);
+        // Check for new frame data via publish (zero-copy snapshot)
+        if let Some(snapshot) = self.shared_frame.publish() {
+            self.upload_texture(snapshot.width, snapshot.height, &snapshot.data);
         }
 
         // Get the next surface texture

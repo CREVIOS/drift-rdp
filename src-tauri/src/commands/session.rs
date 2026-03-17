@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use tauri::{
     ipc::{Channel, InvokeResponseBody},
     AppHandle, State,
@@ -5,6 +6,7 @@ use tauri::{
 
 use crate::rdp::client::SessionCommand;
 use crate::rdp::session::{SessionInfo, SessionManager, MAX_SESSIONS};
+use crate::renderer::shared_frame::SharedFrame;
 use crate::store::connections::ConnectionStore;
 use crate::store::credentials::CredentialStore;
 use crate::store::settings::SettingsStore;
@@ -18,6 +20,7 @@ pub async fn connect(
     cred_store: State<'_, CredentialStore>,
     session_mgr: State<'_, SessionManager>,
     settings_store: State<'_, SettingsStore>,
+    shared_frame: State<'_, Arc<SharedFrame>>,
 ) -> Result<String, String> {
     // Check max session limit
     let count = session_mgr.session_count().await;
@@ -59,7 +62,14 @@ pub async fn connect(
 
     // Create and spawn the session actor (with password for CredSSP/NLA)
     let session_id = session_mgr
-        .create_session(config, password, frame_channel, app, auto_reconnect)
+        .create_session(
+            config,
+            password,
+            frame_channel,
+            app,
+            auto_reconnect,
+            Some(Arc::clone(&shared_frame)),
+        )
         .await?;
 
     // Update last_connected_at on the connection

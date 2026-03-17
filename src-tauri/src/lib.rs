@@ -7,6 +7,7 @@ mod utils;
 use tauri::Manager;
 
 use rdp::session::SessionManager;
+use renderer::shared_frame::SharedFrame;
 use store::connections::ConnectionStore;
 use store::credentials::CredentialStore;
 use store::settings::SettingsStore;
@@ -37,12 +38,14 @@ pub fn run() {
             let settings_store = SettingsStore::new(data_dir);
             let session_manager = SessionManager::new();
             let credential_store = CredentialStore::new();
+            let shared_frame = SharedFrame::new(1920, 1080);
 
             // Register managed state
             app.manage(connection_store);
             app.manage(settings_store);
             app.manage(session_manager);
             app.manage(credential_store);
+            app.manage(shared_frame);
 
             Ok(())
         })

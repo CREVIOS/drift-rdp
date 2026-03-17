@@ -11,6 +11,7 @@ use crate::rdp::clipboard::SessionClipboardBackend;
 use crate::rdp::display::FrameBuffer;
 use crate::rdp::frame_transport::{encode_full_frame_packet, encode_h264_packet, encode_image_update_packet};
 use crate::renderer::h264_encoder::H264FrameEncoder;
+use crate::renderer::shared_frame::SharedFrame;
 use crate::store::connections::ConnectionConfig;
 
 pub const MAX_SESSIONS: usize = 10;
@@ -102,6 +103,7 @@ struct SessionActor {
     last_error: Option<String>,
     auto_reconnect: bool,
     h264_encoder: Option<H264FrameEncoder>,
+    shared_frame: Option<Arc<SharedFrame>>,
 }
 
 impl SessionActor {
@@ -115,6 +117,7 @@ impl SessionActor {
         frame_channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
         app_handle: tauri::AppHandle,
         auto_reconnect: bool,
+        shared_frame: Option<Arc<SharedFrame>>,
     ) -> Self {
         let (width, height) = normalize_remote_resolution(
             config.display_width.unwrap_or(1920),
@@ -154,6 +157,7 @@ impl SessionActor {
             last_error: None,
             auto_reconnect,
             h264_encoder,
+            shared_frame,
         }
     }
 
@@ -554,6 +558,29 @@ impl SessionActor {
                     }
 
                     if !updated_regions.is_empty() {
+                        // Write dirty rects to SharedFrame for GPU renderer
+                        if let Some(ref sf) = self.shared_frame {
+                            use ironrdp::pdu::geometry::Rectangle as _;
+                            let stride = image.stride();
+                            let img_data = image.data();
+                            for rect in &updated_regions {
+                                let x_offset = usize::from(rect.left) * 4;
+                                let y_start = usize::from(rect.top);
+                                let row_start = y_start * stride + x_offset;
+                                if row_start < img_data.len() {
+                                    sf.update_rect(
+                                        rect.left,
+                                        rect.top,
+                                        rect.width(),
+                                        rect.height(),
+                                        &img_data[row_start..],
+                                        stride,
+                                    );
+                                }
+                            }
+                        }
+
+                        // Also send via IPC channel (fallback path)
                         let packet = encode_image_update_packet(
                             &image,
                             &updated_regions,
@@ -960,6 +987,7 @@ impl SessionManager {
         frame_channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
         app_handle: tauri::AppHandle,
         auto_reconnect: bool,
+        shared_frame: Option<Arc<SharedFrame>>,
     ) -> Result<String, String> {
         let count = self.session_count().await;
         if count >= MAX_SESSIONS {
@@ -1009,6 +1037,7 @@ impl SessionManager {
             frame_channel,
             app_handle,
             auto_reconnect,
+            shared_frame,
         );
 
         // Spawn the actor task
