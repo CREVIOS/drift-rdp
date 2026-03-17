@@ -11,6 +11,7 @@ use crate::store::connections::ConnectionStore;
 use crate::store::credentials::CredentialStore;
 use crate::store::settings::SettingsStore;
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn connect(
     connection_id: String,

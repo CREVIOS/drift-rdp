@@ -9,7 +9,9 @@ use uuid::Uuid;
 use crate::rdp::client::{attempt_rdp_connection, ConnectionOutcome, SessionCommand};
 use crate::rdp::clipboard::SessionClipboardBackend;
 use crate::rdp::display::FrameBuffer;
-use crate::rdp::frame_transport::{encode_full_frame_packet, encode_h264_packet, encode_image_update_packet};
+use crate::rdp::frame_transport::{
+    encode_full_frame_packet, encode_h264_packet, encode_image_update_packet,
+};
 use crate::renderer::h264_encoder::H264FrameEncoder;
 use crate::renderer::shared_frame::SharedFrame;
 use crate::store::connections::ConnectionConfig;
@@ -113,6 +115,7 @@ struct SessionActor {
 }
 
 impl SessionActor {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         id: String,
         config: ConnectionConfig,
@@ -137,7 +140,10 @@ impl SessionActor {
                 Some(enc)
             }
             Err(e) => {
-                log::warn!("Failed to initialize H.264 encoder, will use raw RGBA: {}", e);
+                log::warn!(
+                    "Failed to initialize H.264 encoder, will use raw RGBA: {}",
+                    e
+                );
                 None
             }
         };
@@ -443,7 +449,9 @@ impl SessionActor {
                 self.publish_info();
 
                 // Run the real RDP session loop
-                let disconnect_reason = self.run_real_session_loop(connection_result, framed).await;
+                let disconnect_reason = self
+                    .run_real_session_loop(*connection_result, *framed)
+                    .await;
 
                 if disconnect_reason == DisconnectReason::ConnectionLost && self.auto_reconnect {
                     self.run_reconnect_loop().await;
@@ -857,7 +865,9 @@ impl SessionActor {
                         attempt
                     );
 
-                    let reason = self.run_real_session_loop(connection_result, framed).await;
+                    let reason = self
+                        .run_real_session_loop(*connection_result, *framed)
+                        .await;
                     match reason {
                         DisconnectReason::UserDisconnect => return,
                         DisconnectReason::ConnectionLost => continue,

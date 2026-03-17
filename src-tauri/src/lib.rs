@@ -73,7 +73,10 @@ pub fn run() {
                     std::thread::Builder::new()
                         .name("gpu-render".into())
                         .spawn(move || {
-                            log::info!("[GPU] Render thread started (thread: {:?})", std::thread::current().id());
+                            log::info!(
+                                "[GPU] Render thread started (thread: {:?})",
+                                std::thread::current().id()
+                            );
                             let mut first_frame = true;
                             loop {
                                 // Sleep until session actor signals a new frame (via condvar)
@@ -87,8 +90,12 @@ pub fn run() {
                                             first_frame = false;
                                         }
                                     }
-                                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                        log::warn!("Surface lost/outdated, waiting for reconfigure");
+                                    Err(
+                                        wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated,
+                                    ) => {
+                                        log::warn!(
+                                            "Surface lost/outdated, waiting for reconfigure"
+                                        );
                                         std::thread::sleep(std::time::Duration::from_millis(16));
                                     }
                                     Err(wgpu::SurfaceError::OutOfMemory) => {
@@ -149,18 +156,16 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        match event {
-            RunEvent::WindowEvent {
-                label: _,
-                event: WindowEvent::Resized(size),
-                ..
-            } => {
-                // Resize the GPU surface if renderer exists
-                if let Some(renderer) = app_handle.try_state::<Arc<GpuRenderer>>() {
-                    renderer.resize(size.width, size.height);
-                }
+        if let RunEvent::WindowEvent {
+            label: _,
+            event: WindowEvent::Resized(size),
+            ..
+        } = event
+        {
+            // Resize the GPU surface if renderer exists
+            if let Some(renderer) = app_handle.try_state::<Arc<GpuRenderer>>() {
+                renderer.resize(size.width, size.height);
             }
-            _ => {}
         }
     });
 }

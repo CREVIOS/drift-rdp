@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex, Condvar,
+    Arc, Condvar, Mutex,
 };
 
 /// Immutable snapshot of a frame. The renderer holds an `Arc<FrameSnapshot>`
@@ -40,6 +40,7 @@ pub struct WriteGuard<'a> {
     inner: std::sync::MutexGuard<'a, SharedFrameInner>,
 }
 
+#[allow(dead_code)]
 impl WriteGuard<'_> {
     /// Write a dirty rectangle into the frame buffer.
     /// `rgba_data` starts at the rect's first pixel; rows are `stride` bytes apart.
@@ -50,7 +51,9 @@ impl WriteGuard<'_> {
 
         for row in 0..h as usize {
             let dy = y as usize + row;
-            if dy >= fh { break; }
+            if dy >= fh {
+                break;
+            }
             let src_offset = row * stride;
             let dst_offset = (dy * fw + x as usize) * 4;
             if src_offset + row_bytes <= rgba_data.len()
@@ -62,8 +65,12 @@ impl WriteGuard<'_> {
         }
     }
 
-    pub fn width(&self) -> u32 { self.inner.width }
-    pub fn height(&self) -> u32 { self.inner.height }
+    pub fn width(&self) -> u32 {
+        self.inner.width
+    }
+    pub fn height(&self) -> u32 {
+        self.inner.height
+    }
 }
 
 impl SharedFrame {
@@ -103,10 +110,13 @@ impl SharedFrame {
     }
 
     /// Called by the session actor to update the entire frame.
+    #[allow(dead_code)]
     pub fn update_full(&self, width: u32, height: u32, data: &[u8]) {
         let mut inner = self.inner.lock().unwrap();
         let expected = (width * height * 4) as usize;
-        if data.len() < expected { return; }
+        if data.len() < expected {
+            return;
+        }
         if inner.width != width || inner.height != height {
             inner.width = width;
             inner.height = height;
@@ -118,6 +128,7 @@ impl SharedFrame {
     }
 
     /// Single rect update (for simple cases). For multiple rects, use begin_write().
+    #[allow(dead_code)]
     pub fn update_rect(&self, x: u16, y: u16, w: u16, h: u16, rgba_data: &[u8], stride: usize) {
         let mut guard = self.begin_write();
         guard.update_rect(x, y, w, h, rgba_data, stride);
@@ -167,14 +178,16 @@ impl SharedFrame {
         }
         let guard = self.inner.lock().unwrap();
         let (_guard, result) = self.notify.wait_timeout(guard, timeout).unwrap();
-        result.timed_out() == false || self.dirty.load(Ordering::Acquire)
+        !result.timed_out() || self.dirty.load(Ordering::Acquire)
     }
 
+    #[allow(dead_code)]
     pub fn dimensions(&self) -> (u32, u32) {
         let inner = self.inner.lock().unwrap();
         (inner.width, inner.height)
     }
 
+    #[allow(dead_code)]
     pub fn version(&self) -> u64 {
         self.version.load(Ordering::Relaxed)
     }

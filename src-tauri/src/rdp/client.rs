@@ -51,8 +51,8 @@ pub type TlsFramed = TokioFramed<ironrdp_tls::TlsStream<TcpStream>>;
 pub enum ConnectionOutcome {
     /// Real IronRDP connection established.
     RealSession {
-        connection_result: ConnectionResult,
-        framed: TlsFramed,
+        connection_result: Box<ConnectionResult>,
+        framed: Box<TlsFramed>,
     },
     /// Connection failed; reason provided.
     Failed(String),
@@ -287,8 +287,8 @@ pub async fn attempt_rdp_connection(
     );
 
     ConnectionOutcome::RealSession {
-        connection_result,
-        framed: tls_framed,
+        connection_result: Box::new(connection_result),
+        framed: Box::new(tls_framed),
     }
 }
 

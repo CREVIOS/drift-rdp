@@ -95,7 +95,7 @@ impl FrameBuffer {
         let w = self.width;
         let h = self.height;
         // BMP rows are padded to 4-byte boundaries; with 3 bytes/pixel (BGR):
-        let row_size = ((w * 3 + 3) / 4) * 4;
+        let row_size = (w * 3).div_ceil(4) * 4;
         let pixel_data_size = row_size * h;
         let file_size = 54 + pixel_data_size;
 

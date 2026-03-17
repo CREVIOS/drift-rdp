@@ -56,6 +56,7 @@ impl H264FrameEncoder {
     }
 
     /// Force the next encoded frame to be a keyframe (IDR).
+    #[allow(dead_code)]
     pub fn force_keyframe(&mut self) {
         self.encoder.force_intra_frame();
     }
