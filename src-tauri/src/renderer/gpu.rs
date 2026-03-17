@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 
 use super::shared_frame::SharedFrame;
 
@@ -6,36 +7,36 @@ pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
+    surface_config: StdMutex<wgpu::SurfaceConfiguration>,
     render_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
-    bind_group: Option<wgpu::BindGroup>,
-    texture: Option<wgpu::Texture>,
+    bind_group: StdMutex<Option<wgpu::BindGroup>>,
+    texture: StdMutex<Option<wgpu::Texture>>,
     sampler: wgpu::Sampler,
-    current_width: u32,
-    current_height: u32,
+    current_dims: StdMutex<(u32, u32)>,
     shared_frame: Arc<SharedFrame>,
 }
 
 impl GpuRenderer {
     pub async fn new(
-        window: Arc<winit::window::Window>,
+        window: tauri::WebviewWindow,
         shared_frame: Arc<SharedFrame>,
     ) -> Result<Self, String> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+        let size = window
+            .inner_size()
+            .map_err(|e| format!("Failed to get window size: {}", e))?;
+
+        let instance = wgpu::Instance::default();
 
         let surface = instance
-            .create_surface(window.clone())
-            .map_err(|e| format!("Failed to create GPU surface: {}", e))?;
+            .create_surface(window)
+            .map_err(|e| format!("Failed to create surface: {}", e))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
             })
             .await
             .ok_or_else(|| "No GPU adapter found".to_string())?;
@@ -53,7 +54,6 @@ impl GpuRenderer {
             .await
             .map_err(|e| format!("Failed to create GPU device: {}", e))?;
 
-        let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
             .formats
@@ -62,14 +62,14 @@ impl GpuRenderer {
             .copied()
             .unwrap_or(surface_caps.formats[0]);
 
-        // Prefer Mailbox (lowest latency) with fallback to AutoVsync
+        // Prefer Mailbox (lowest latency) with fallback to Fifo
         let present_mode = if surface_caps
             .present_modes
             .contains(&wgpu::PresentMode::Mailbox)
         {
             wgpu::PresentMode::Mailbox
         } else {
-            wgpu::PresentMode::AutoVsync
+            wgpu::PresentMode::Fifo
         };
 
         let surface_config = wgpu::SurfaceConfiguration {
@@ -160,28 +160,28 @@ impl GpuRenderer {
             device,
             queue,
             surface,
-            surface_config,
+            surface_config: StdMutex::new(surface_config),
             render_pipeline,
             bind_group_layout,
-            bind_group: None,
-            texture: None,
+            bind_group: StdMutex::new(None),
+            texture: StdMutex::new(None),
             sampler,
-            current_width: 0,
-            current_height: 0,
+            current_dims: StdMutex::new((0, 0)),
             shared_frame,
         })
     }
 
-    pub fn resize(&mut self, new_width: u32, new_height: u32) {
-        if new_width > 0 && new_height > 0 {
-            self.surface_config.width = new_width;
-            self.surface_config.height = new_height;
-            self.surface.configure(&self.device, &self.surface_config);
+    pub fn resize(&self, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            let mut config = self.surface_config.lock().unwrap();
+            config.width = width;
+            config.height = height;
+            self.surface.configure(&self.device, &config);
         }
     }
 
     /// Upload new frame data to the GPU texture if dirty, then render.
-    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(&self) -> Result<(), wgpu::SurfaceError> {
         // Check for new frame data via publish (zero-copy snapshot)
         if let Some(snapshot) = self.shared_frame.publish() {
             self.upload_texture(snapshot.width, snapshot.height, &snapshot.data);
@@ -211,7 +211,8 @@ impl GpuRenderer {
                 ..Default::default()
             });
 
-            if let Some(ref bind_group) = self.bind_group {
+            let bind_group_guard = self.bind_group.lock().unwrap();
+            if let Some(ref bind_group) = *bind_group_guard {
                 render_pass.set_pipeline(&self.render_pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
                 render_pass.draw(0..6, 0..1); // 6 vertices = 2 triangles = 1 quad
@@ -224,9 +225,12 @@ impl GpuRenderer {
         Ok(())
     }
 
-    fn upload_texture(&mut self, width: u32, height: u32, data: &[u8]) {
+    fn upload_texture(&self, width: u32, height: u32, data: &[u8]) {
+        let mut dims = self.current_dims.lock().unwrap();
+        let mut texture_guard = self.texture.lock().unwrap();
+
         // Recreate texture if size changed
-        if self.current_width != width || self.current_height != height || self.texture.is_none() {
+        if dims.0 != width || dims.1 != height || texture_guard.is_none() {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("rdp-frame"),
                 size: wgpu::Extent3d {
@@ -258,14 +262,13 @@ impl GpuRenderer {
                 ],
             });
 
-            self.texture = Some(texture);
-            self.bind_group = Some(bind_group);
-            self.current_width = width;
-            self.current_height = height;
+            *texture_guard = Some(texture);
+            *self.bind_group.lock().unwrap() = Some(bind_group);
+            *dims = (width, height);
         }
 
         // Upload pixel data
-        if let Some(ref texture) = self.texture {
+        if let Some(ref texture) = *texture_guard {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture,

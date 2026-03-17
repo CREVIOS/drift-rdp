@@ -4,9 +4,11 @@ mod renderer;
 mod store;
 mod utils;
 
-use tauri::Manager;
+use std::sync::Arc;
+use tauri::{Manager, RunEvent, WindowEvent};
 
 use rdp::session::SessionManager;
+use renderer::gpu::GpuRenderer;
 use renderer::shared_frame::SharedFrame;
 use store::connections::ConnectionStore;
 use store::credentials::CredentialStore;
@@ -19,7 +21,7 @@ pub fn run() {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .setup(|app| {
             // Resolve the app data directory for persistent storage
@@ -45,7 +47,54 @@ pub fn run() {
             app.manage(settings_store);
             app.manage(session_manager);
             app.manage(credential_store);
-            app.manage(shared_frame);
+            app.manage(shared_frame.clone());
+
+            // Create GPU renderer from the main window
+            let window = app.get_webview_window("main").unwrap();
+            let sf = shared_frame.clone();
+
+            match tauri::async_runtime::block_on(GpuRenderer::new(window, sf)) {
+                Ok(renderer) => {
+                    let renderer = Arc::new(renderer);
+                    app.manage(renderer.clone());
+
+                    // Spawn the render loop
+                    let r = renderer.clone();
+                    tauri::async_runtime::spawn(async move {
+                        loop {
+                            match r.render() {
+                                Ok(()) => {}
+                                Err(
+                                    wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated,
+                                ) => {
+                                    // Surface needs reconfigure — will happen on next resize event
+                                    log::warn!("Surface lost/outdated, waiting for reconfigure");
+                                    tokio::time::sleep(std::time::Duration::from_millis(16))
+                                        .await;
+                                }
+                                Err(wgpu::SurfaceError::OutOfMemory) => {
+                                    log::error!("GPU out of memory");
+                                    break;
+                                }
+                                Err(e) => {
+                                    log::warn!("Render error: {}", e);
+                                }
+                            }
+                            // Yield to let other tasks run
+                            tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+                        }
+                    });
+
+                    log::info!("GPU renderer initialized successfully");
+                }
+                Err(e) => {
+                    log::warn!(
+                        "GPU renderer failed to initialize, falling back to IPC frames: {}",
+                        e
+                    );
+                    // No GPU renderer — the webview Canvas fallback handles frames via IPC
+                }
+            }
 
             Ok(())
         })
@@ -78,6 +127,22 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::update_settings,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        match event {
+            RunEvent::WindowEvent {
+                label: _,
+                event: WindowEvent::Resized(size),
+                ..
+            } => {
+                // Resize the GPU surface if renderer exists
+                if let Some(renderer) = app_handle.try_state::<Arc<GpuRenderer>>() {
+                    renderer.resize(size.width, size.height);
+                }
+            }
+            _ => {}
+        }
+    });
 }
