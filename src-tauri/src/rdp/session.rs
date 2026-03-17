@@ -609,16 +609,17 @@ impl SessionActor {
                                     self.id, self.metrics.frames_sent, fps, rect_count
                                 );
                             }
-                        } else {
-                            // IPC fallback only when no GPU renderer
-                            let packet = encode_image_update_packet(
-                                &image,
-                                &updated_regions,
-                                &mut self.frame_packet_scratch,
-                            );
-                            if self.send_frame_packet(packet).is_err() {
-                                return DisconnectReason::ConnectionLost;
-                            }
+                        }
+
+                        // Always send via IPC — webview Canvas renders these
+                        // (wgpu renders behind the webview, not visible yet)
+                        let packet = encode_image_update_packet(
+                            &image,
+                            &updated_regions,
+                            &mut self.frame_packet_scratch,
+                        );
+                        if self.send_frame_packet(packet).is_err() {
+                            return DisconnectReason::ConnectionLost;
                         }
                     }
 

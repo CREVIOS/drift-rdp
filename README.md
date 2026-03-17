@@ -1,73 +1,254 @@
-# React + TypeScript + Vite
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="80" />
+</p>
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+<h1 align="center">Drift</h1>
 
-Currently, two official plugins are available:
+<p align="center">
+  <strong>A fast, beautiful remote desktop client for macOS & Linux.</strong>
+  <br />
+  Built with Rust, Tauri, React, and IronRDP.
+</p>
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+<p align="center">
+  <a href="#features">Features</a> &middot;
+  <a href="#install">Install</a> &middot;
+  <a href="#building-from-source">Build</a> &middot;
+  <a href="#architecture">Architecture</a> &middot;
+  <a href="#roadmap">Roadmap</a>
+</p>
 
-## React Compiler
+<br />
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+<p align="center">
+  <img src=".github/assets/drift-session.png" width="800" alt="Drift — connected to a Windows machine" />
+</p>
 
-## Expanding the ESLint configuration
+<br />
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Why Drift?
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+Most RDP clients on macOS are either slow, ugly, or abandoned. Drift is none of those.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+- **Native performance** &mdash; GPU-rendered frames via wgpu (Metal/Vulkan). No Electron, no browser overhead.
+- **Real RDP protocol** &mdash; Full IronRDP implementation with TLS + CredSSP/NLA authentication.
+- **Beautiful UI** &mdash; Custom-designed interface with shadcn/ui, glassmorphism, and smooth animations.
+- **Tiny footprint** &mdash; ~15MB binary. Ships as a single `.app` or `.AppImage`.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Features
+
+**Remote Desktop**
+- Connect to Windows machines via RDP (port 3389)
+- Full TLS encryption + NLA/CredSSP authentication
+- Keyboard, mouse, and trackpad scroll forwarding
+- Multi-session support with tabbed interface (up to 10 simultaneous)
+- Auto-reconnect with exponential backoff on connection loss
+- Configurable resolution, color depth, and quality
+
+**GPU Rendering Pipeline**
+- wgpu-powered frame rendering (Metal on macOS, Vulkan on Linux)
+- Zero-copy double-buffer SharedFrame architecture
+- Condvar-based frame signaling (0% CPU when idle)
+- H.264 hardware encoder ready for session recording
+- Fallback to software Canvas rendering when GPU unavailable
+
+**Interface**
+- Quick Connect via `Cmd+K` &mdash; search and connect in seconds
+- Connection cards with color accents, tags, and latency indicators
+- Real-time performance HUD (FPS, latency, bandwidth, resolution)
+- Settings page with theme, display, and network configuration
+- Keyboard shortcut overlay (`Cmd+?`)
+- Dark and light themes
+- SSH config import (`~/.ssh/config`)
+
+**Security**
+- Passwords stored in the OS keychain (macOS Keychain / Linux Secret Service)
+- No plaintext credential storage
+- Connection configs persisted as local JSON (no cloud, no telemetry)
+
+## Install
+
+### macOS
+
+```bash
+# Download the latest .dmg from Releases
+# Or build from source (see below)
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Linux
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+# Download the latest .AppImage or .deb from Releases
+# Or build from source (see below)
 ```
+
+> **Note:** Drift is in active development. Pre-built binaries will be available once v0.2.0 ships.
+
+## Building from Source
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (1.77+)
+- [Node.js](https://nodejs.org/) (20+)
+- [Tauri CLI](https://v2.tauri.app/start/prerequisites/)
+
+**macOS additional:**
+```bash
+xcode-select --install
+```
+
+**Linux additional:**
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+```
+
+### Build & Run
+
+```bash
+git clone https://github.com/CREVIOS/drift-rdp.git
+cd drift-rdp
+npm install
+cargo tauri dev        # Development (hot-reload)
+cargo tauri build      # Production binary
+```
+
+## Architecture
+
+```
+                    Drift Architecture
+    ================================================
+
+    ┌─────────── Tauri Window ───────────────────┐
+    │                                             │
+    │  ┌─── wgpu Surface (Metal/Vulkan) ───────┐ │
+    │  │  GpuRenderer                           │ │
+    │  │  ├── SharedFrame.publish() [zero-copy] │ │
+    │  │  ├── queue.write_texture() [DMA]       │ │
+    │  │  └── render_pass → present             │ │
+    │  └────────────────────────────────────────┘ │
+    │                                             │
+    │  ┌─── WebView (React + shadcn/ui) ───────┐ │
+    │  │  Toolbar, Sidebar, Tabs, Settings      │ │
+    │  │  (transparent overlay for UI only)     │ │
+    │  └────────────────────────────────────────┘ │
+    └─────────────────────────────────────────────┘
+                        │
+              Tauri IPC (input events)
+                        │
+    ┌─────────── Rust Backend ────────────────────┐
+    │                                              │
+    │  SessionManager                              │
+    │  ├── SessionActor (1 per connection)         │
+    │  │   ├── IronRDP ActiveStage                 │
+    │  │   ├── TLS + CredSSP/NLA                   │
+    │  │   ├── SharedFrame.update_rect()           │
+    │  │   └── Input forwarding (kbd/mouse/scroll) │
+    │  │                                           │
+    │  ├── ConnectionStore (JSON persistence)      │
+    │  ├── CredentialStore (OS keychain)           │
+    │  └── SettingsStore                           │
+    └──────────────────────────────────────────────┘
+```
+
+### Frame Pipeline
+
+```
+IronRDP GraphicsUpdate (dirty rects)
+    │
+    ▼
+SharedFrame.begin_write()          ← 1 mutex lock for all rects
+    ├── update_rect() × N          ← memcpy, ~0.3ms
+    └── mark_dirty()               ← condvar wakes render thread
+    │
+    ▼
+GpuRenderer (dedicated OS thread)
+    ├── wait_for_frame()           ← sleeps until signaled (0% CPU idle)
+    ├── publish()                  ← zero-copy buffer swap
+    ├── write_texture()            ← DMA upload to GPU, ~1ms
+    ├── render_pass()              ← fullscreen quad shader
+    └── present()                  ← Metal/Vulkan display
+```
+
+### Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Protocol | [IronRDP](https://github.com/Devolutions/IronRDP) (Rust RDP implementation) |
+| Runtime | [Tauri v2](https://v2.tauri.app/) (Rust + WebView) |
+| GPU | [wgpu](https://wgpu.rs/) (Metal / Vulkan / DX12) |
+| Frontend | React 19 + TypeScript + [shadcn/ui](https://ui.shadcn.com/) |
+| Styling | Tailwind CSS v4 |
+| TLS | rustls + webpki |
+| Auth | CredSSP / NLA via IronRDP |
+| Credentials | [keyring](https://crates.io/crates/keyring) (OS keychain) |
+| Video | [openh264](https://crates.io/crates/openh264) (H.264 encoder) |
+
+## Roadmap
+
+- [x] Full IronRDP connection (TLS + CredSSP/NLA)
+- [x] GPU-rendered frames via wgpu
+- [x] Keyboard + mouse + trackpad scroll input
+- [x] Multi-session tabs
+- [x] Auto-reconnect with backoff
+- [x] H.264 encoder (for future session recording)
+- [x] Dark/light theme + shadcn/ui
+- [x] Quick Connect (`Cmd+K`)
+- [x] SSH config import
+- [ ] Clipboard sync (bidirectional text + images)
+- [ ] Audio redirection
+- [ ] File transfer via drag-and-drop
+- [ ] Multi-monitor support
+- [ ] Session recording (H.264 → MP4)
+- [ ] SSH tunneling for RDP-over-SSH
+- [ ] Auto-discovery of Windows machines on LAN
+
+## Project Structure
+
+```
+drift-rdp/
+├── src/                      # React frontend
+│   ├── components/           # UI components (shadcn/ui)
+│   │   ├── connections/      # Connection cards, forms
+│   │   ├── session/          # Canvas, toolbar, tabs, HUD
+│   │   ├── settings/         # Settings page
+│   │   ├── layout/           # Sidebar, status bar
+│   │   └── ui/               # shadcn primitives
+│   ├── hooks/                # useRdpSession, useTheme, etc.
+│   ├── stores/               # Zustand stores
+│   ├── lib/                  # Input mapper, frame protocol, H.264 decoder
+│   └── styles/               # Tailwind + theme
+├── src-tauri/                # Rust backend
+│   └── src/
+│       ├── rdp/              # IronRDP session actor, client, input
+│       ├── renderer/         # wgpu GPU renderer, SharedFrame, H.264 encoder
+│       ├── commands/         # Tauri IPC commands
+│       ├── store/            # Persistence (connections, settings, keychain)
+│       └── utils/            # TCP probe, latency measurement
+└── .github/                  # CI/CD, assets
+```
+
+## Contributing
+
+Contributions are welcome! Please open an issue first to discuss what you'd like to change.
+
+```bash
+# Run in development
+cargo tauri dev
+
+# Type-check
+npx tsc --noEmit
+cargo check
+
+# Build for production
+cargo tauri build
+```
+
+## License
+
+MIT
+
+---
+
+<p align="center">
+  <sub>Built with Rust, shipped with love.</sub>
+</p>

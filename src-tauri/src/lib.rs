@@ -22,7 +22,15 @@ pub fn run() {
         .expect("Failed to install rustls crypto provider");
 
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .level_for("wgpu_core", log::LevelFilter::Warn)
+                .level_for("wgpu_hal", log::LevelFilter::Warn)
+                .level_for("naga", log::LevelFilter::Warn)
+                .level_for("tao", log::LevelFilter::Warn)
+                .build(),
+        )
         .setup(|app| {
             // Resolve the app data directory for persistent storage
             let data_dir = app
