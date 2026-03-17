@@ -64,6 +64,7 @@ interface Props {
   onMouseMove: (e: globalThis.MouseEvent, bounds: MouseSurfaceBounds) => void;
   onMouseDown: (e: globalThis.MouseEvent, bounds: MouseSurfaceBounds) => void;
   onMouseUp: (e: globalThis.MouseEvent, bounds: MouseSurfaceBounds) => void;
+  onWheel: (e: globalThis.WheelEvent, bounds: MouseSurfaceBounds) => void;
   onResize?: (width: number, height: number) => void;
 }
 
@@ -98,6 +99,7 @@ export function SessionCanvas({
   onMouseMove,
   onMouseDown,
   onMouseUp,
+  onWheel,
   onResize,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -366,26 +368,37 @@ export function SessionCanvas({
     return () => observer.disconnect();
   }, [onResize]);
 
+  // Auto-focus the canvas when it mounts (so keyboard works immediately)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.focus();
+    }
+  }, []);
+
+  // Keyboard events — listen on window so keys work even if canvas loses focus
   useEffect(() => {
     const handleDown = (e: globalThis.KeyboardEvent) => {
+      // Only capture when the session view is active (not typing in a dialog/input)
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       e.preventDefault();
       onKeyDown(e);
     };
 
     const handleUp = (e: globalThis.KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       e.preventDefault();
       onKeyUp(e);
     };
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    canvas.addEventListener('keydown', handleDown);
-    canvas.addEventListener('keyup', handleUp);
+    window.addEventListener('keydown', handleDown);
+    window.addEventListener('keyup', handleUp);
 
     return () => {
-      canvas.removeEventListener('keydown', handleDown);
-      canvas.removeEventListener('keyup', handleUp);
+      window.removeEventListener('keydown', handleDown);
+      window.removeEventListener('keyup', handleUp);
     };
   }, [onKeyDown, onKeyUp]);
 
@@ -432,6 +445,17 @@ export function SessionCanvas({
       }
     },
     [getMouseBounds, onMouseUp]
+  );
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      e.preventDefault();
+      const bounds = getMouseBounds();
+      if (bounds) {
+        onWheel(e.nativeEvent, bounds);
+      }
+    },
+    [getMouseBounds, onWheel]
   );
 
   if (status === 'connecting') {
@@ -485,6 +509,7 @@ export function SessionCanvas({
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
+        onWheel={handleWheel}
       />
       {status === 'reconnecting' && (
         <motion.div

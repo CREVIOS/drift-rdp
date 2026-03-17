@@ -107,6 +107,7 @@ export async function sendMouseEvent(sessionId: string, event: RdpMouseEvent): P
     y: event.y,
     button: event.button ? String(event.button) : null,
     eventType: event.eventType,
+    scrollDelta: event.scrollDelta ?? 0,
   });
 }
 

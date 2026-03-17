@@ -629,10 +629,10 @@ impl SessionActor {
                                 }
                             }
                         }
-                        Some(SessionCommand::SendMouse { x, y, button, event_type }) => {
+                        Some(SessionCommand::SendMouse { x, y, button, event_type, scroll_delta }) => {
                             log::debug!(
-                                "Session {} mouse event: ({},{}) btn={:?} type={}",
-                                self.id, x, y, button, event_type
+                                "Session {} mouse event: ({},{}) btn={:?} type={} scroll={}",
+                                self.id, x, y, button, event_type, scroll_delta
                             );
                             // Encode mouse event as FastPath input
                             use ironrdp::pdu::input::fast_path::FastPathInputEvent;
@@ -640,6 +640,8 @@ impl SessionActor {
                             use ironrdp::pdu::input::MousePdu;
 
                             let mut flags = PointerFlags::empty();
+                            let mut wheel_units: i16 = 0;
+
                             match event_type.as_str() {
                                 "move" => {
                                     flags |= PointerFlags::MOVE;
@@ -661,6 +663,20 @@ impl SessionActor {
                                         _ => flags |= PointerFlags::LEFT_BUTTON,
                                     }
                                 }
+                                "scroll" => {
+                                    // Per MS-RDPBCGR spec:
+                                    // PTRFLAGS_WHEEL (0x0200) = vertical wheel
+                                    // PTRFLAGS_WHEEL_NEGATIVE (0x0100) = negative rotation
+                                    // WheelRotationMask (0x01FF) = rotation units in bottom 9 bits
+                                    flags |= PointerFlags::VERTICAL_WHEEL;
+                                    let delta = scroll_delta.clamp(-255, 255);
+                                    if delta < 0 {
+                                        flags |= PointerFlags::WHEEL_NEGATIVE;
+                                        wheel_units = (-delta) as i16;
+                                    } else {
+                                        wheel_units = delta as i16;
+                                    }
+                                }
                                 _ => {
                                     flags |= PointerFlags::MOVE;
                                 }
@@ -668,7 +684,7 @@ impl SessionActor {
 
                             let event = FastPathInputEvent::MouseEvent(MousePdu {
                                 flags,
-                                number_of_wheel_rotation_units: 0,
+                                number_of_wheel_rotation_units: wheel_units,
                                 x_position: x.max(0) as u16,
                                 y_position: y.max(0) as u16,
                             });
@@ -890,6 +906,7 @@ impl SessionActor {
                     y,
                     button,
                     event_type,
+                    scroll_delta: _,
                 }) => {
                     log::debug!(
                         "Session {} mouse event: ({},{}) btn={:?} type={}",

@@ -141,6 +141,7 @@ pub async fn send_mouse_event(
     y: i32,
     button: Option<String>,
     event_type: String,
+    scroll_delta: Option<i32>,
     session_mgr: State<'_, SessionManager>,
 ) -> Result<(), String> {
     let cmd_tx = session_mgr
@@ -154,6 +155,7 @@ pub async fn send_mouse_event(
             y,
             button,
             event_type,
+            scroll_delta: scroll_delta.unwrap_or(0),
         })
         .await
         .map_err(|_| format!("Session '{}' actor is no longer running", session_id))

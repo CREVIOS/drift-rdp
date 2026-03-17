@@ -62,4 +62,5 @@ export interface MouseEvent {
   y: number;
   button: number;
   eventType: 'move' | 'down' | 'up' | 'scroll';
+  scrollDelta?: number;
 }

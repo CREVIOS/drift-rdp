@@ -20,6 +20,7 @@ pub enum SessionCommand {
         y: i32,
         button: Option<String>,
         event_type: String,
+        scroll_delta: i32,
     },
     Resize {
         width: u32,

@@ -31,6 +31,7 @@ export function SessionView() {
     disconnect,
     cancelReconnect,
     sendKey,
+    sendWheel,
     sendMouse,
   } = useRdpSession();
 
@@ -168,6 +169,7 @@ export function SessionView() {
           onMouseMove={(e, rect) => sendMouse(e, 'move', rect)}
           onMouseDown={(e, rect) => sendMouse(e, 'down', rect)}
           onMouseUp={(e, rect) => sendMouse(e, 'up', rect)}
+          onWheel={(e, rect) => sendWheel(e, rect)}
           onResize={handleResize}
         />
 

@@ -29,6 +29,10 @@ interface UseRdpSessionReturn {
   disconnect: () => Promise<void>;
   cancelReconnect: () => Promise<void>;
   sendKey: (e: globalThis.KeyboardEvent) => void;
+  sendWheel: (
+    e: globalThis.WheelEvent,
+    bounds?: MouseSurfaceBounds
+  ) => void;
   sendMouse: (
     e: globalThis.MouseEvent,
     type: 'move' | 'down' | 'up' | 'scroll',
@@ -259,6 +263,38 @@ export function useRdpSession(): UseRdpSessionReturn {
     []
   );
 
+  const sendWheel = useCallback(
+    (e: globalThis.WheelEvent, bounds?: MouseSurfaceBounds) => {
+      const currentSessionId = sessionIdRef.current;
+      if (!currentSessionId) return;
+
+      // Map wheel position using same coordinate mapping as mouse
+      const mapped = mapMouseEvent(e as unknown as globalThis.MouseEvent, 'scroll', bounds);
+
+      // Convert deltaY from pixels to RDP wheel rotation units
+      // Browser deltaY: positive = scroll down, negative = scroll up
+      // RDP: positive = scroll up, so we negate
+      // Normalize: trackpad gives small deltas (1-10px), mouse gives 100+ (line mode)
+      let delta = -e.deltaY;
+      if (e.deltaMode === 1) {
+        // Line mode (mouse wheel) — each line = 3 rotation units
+        delta *= 3;
+      } else {
+        // Pixel mode (trackpad) — normalize: ~40px = 1 rotation unit
+        delta = Math.sign(delta) * Math.max(1, Math.round(Math.abs(delta) / 40));
+      }
+
+      // Clamp to RDP max (255 rotation units)
+      delta = Math.max(-255, Math.min(255, delta));
+
+      mapped.scrollDelta = delta;
+      mapped.eventType = 'scroll';
+
+      tauri.sendMouseEvent(currentSessionId, mapped).catch(() => {});
+    },
+    []
+  );
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -280,6 +316,7 @@ export function useRdpSession(): UseRdpSessionReturn {
     disconnect: disconnectFn,
     cancelReconnect: cancelReconnectFn,
     sendKey,
+    sendWheel,
     sendMouse,
   };
 }
