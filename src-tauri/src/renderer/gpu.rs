@@ -3,6 +3,14 @@ use std::sync::Mutex as StdMutex;
 
 use super::shared_frame::SharedFrame;
 
+/// Mutable texture state — single lock for all texture-related fields
+struct TextureState {
+    bind_group: Option<wgpu::BindGroup>,
+    texture: Option<wgpu::Texture>,
+    width: u32,
+    height: u32,
+}
+
 pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -10,10 +18,8 @@ pub struct GpuRenderer {
     surface_config: StdMutex<wgpu::SurfaceConfiguration>,
     render_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
-    bind_group: StdMutex<Option<wgpu::BindGroup>>,
-    texture: StdMutex<Option<wgpu::Texture>>,
+    tex_state: StdMutex<TextureState>,
     sampler: wgpu::Sampler,
-    current_dims: StdMutex<(u32, u32)>,
     shared_frame: Arc<SharedFrame>,
 }
 
@@ -163,10 +169,13 @@ impl GpuRenderer {
             surface_config: StdMutex::new(surface_config),
             render_pipeline,
             bind_group_layout,
-            bind_group: StdMutex::new(None),
-            texture: StdMutex::new(None),
+            tex_state: StdMutex::new(TextureState {
+                bind_group: None,
+                texture: None,
+                width: 0,
+                height: 0,
+            }),
             sampler,
-            current_dims: StdMutex::new((0, 0)),
             shared_frame,
         })
     }
@@ -182,60 +191,22 @@ impl GpuRenderer {
 
     /// Upload new frame data to the GPU texture if dirty, then render.
     pub fn render(&self) -> Result<(), wgpu::SurfaceError> {
-        // Check for new frame data via publish (zero-copy snapshot)
-        if let Some(snapshot) = self.shared_frame.publish() {
-            self.upload_texture(snapshot.width, snapshot.height, &snapshot.data);
-        }
+        // Publish snapshot (zero-copy swap)
+        let snapshot = match self.shared_frame.publish() {
+            Some(s) => s,
+            None => return Ok(()), // Nothing new — skip entirely
+        };
 
-        // Get the next surface texture
-        let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&Default::default());
+        // Single lock for all texture state
+        let mut ts = self.tex_state.lock().unwrap();
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render-encoder"),
-            });
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("render-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-
-            let bind_group_guard = self.bind_group.lock().unwrap();
-            if let Some(ref bind_group) = *bind_group_guard {
-                render_pass.set_pipeline(&self.render_pipeline);
-                render_pass.set_bind_group(0, bind_group, &[]);
-                render_pass.draw(0..6, 0..1); // 6 vertices = 2 triangles = 1 quad
-            }
-        }
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        Ok(())
-    }
-
-    fn upload_texture(&self, width: u32, height: u32, data: &[u8]) {
-        let mut dims = self.current_dims.lock().unwrap();
-        let mut texture_guard = self.texture.lock().unwrap();
-
-        // Recreate texture if size changed
-        if dims.0 != width || dims.1 != height || texture_guard.is_none() {
+        // Recreate texture if dimensions changed
+        if ts.width != snapshot.width || ts.height != snapshot.height || ts.texture.is_none() {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("rdp-frame"),
                 size: wgpu::Extent3d {
-                    width,
-                    height,
+                    width: snapshot.width,
+                    height: snapshot.height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -247,7 +218,7 @@ impl GpuRenderer {
             });
 
             let view = texture.create_view(&Default::default());
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            ts.bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("texture-bg"),
                 layout: &self.bind_group_layout,
                 entries: &[
@@ -260,15 +231,14 @@ impl GpuRenderer {
                         resource: wgpu::BindingResource::Sampler(&self.sampler),
                     },
                 ],
-            });
-
-            *texture_guard = Some(texture);
-            *self.bind_group.lock().unwrap() = Some(bind_group);
-            *dims = (width, height);
+            }));
+            ts.texture = Some(texture);
+            ts.width = snapshot.width;
+            ts.height = snapshot.height;
         }
 
-        // Upload pixel data
-        if let Some(ref texture) = *texture_guard {
+        // Upload pixel data to GPU (DMA transfer)
+        if let Some(ref texture) = ts.texture {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture,
@@ -276,18 +246,53 @@ impl GpuRenderer {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                data,
+                &snapshot.data,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(4 * width),
-                    rows_per_image: Some(height),
+                    bytes_per_row: Some(4 * snapshot.width),
+                    rows_per_image: Some(snapshot.height),
                 },
                 wgpu::Extent3d {
-                    width,
-                    height,
+                    width: snapshot.width,
+                    height: snapshot.height,
                     depth_or_array_layers: 1,
                 },
             );
         }
+
+        // Render fullscreen quad
+        let output = self.surface.get_current_texture()?;
+        let view = output.texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("render-encoder"),
+        });
+
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+
+            if let Some(ref bind_group) = ts.bind_group {
+                rpass.set_pipeline(&self.render_pipeline);
+                rpass.set_bind_group(0, bind_group, &[]);
+                rpass.draw(0..6, 0..1);
+            }
+        }
+        // Release texture lock before GPU submit
+        drop(ts);
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+
+        Ok(())
     }
 }

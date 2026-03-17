@@ -558,17 +558,18 @@ impl SessionActor {
                     }
 
                     if !updated_regions.is_empty() {
-                        // Write dirty rects to SharedFrame for GPU renderer
+                        // Write dirty rects to SharedFrame for GPU renderer (batched — one lock)
                         if let Some(ref sf) = self.shared_frame {
                             use ironrdp::pdu::geometry::Rectangle as _;
                             let stride = image.stride();
                             let img_data = image.data();
+                            let mut guard = sf.begin_write();
                             for rect in &updated_regions {
                                 let x_offset = usize::from(rect.left) * 4;
                                 let y_start = usize::from(rect.top);
                                 let row_start = y_start * stride + x_offset;
                                 if row_start < img_data.len() {
-                                    sf.update_rect(
+                                    guard.update_rect(
                                         rect.left,
                                         rect.top,
                                         rect.width(),
@@ -578,16 +579,18 @@ impl SessionActor {
                                     );
                                 }
                             }
-                        }
-
-                        // Also send via IPC channel (fallback path)
-                        let packet = encode_image_update_packet(
-                            &image,
-                            &updated_regions,
-                            &mut self.frame_packet_scratch,
-                        );
-                        if self.send_frame_packet(packet).is_err() {
-                            return DisconnectReason::ConnectionLost;
+                            drop(guard);
+                            sf.mark_dirty(); // Wakes render thread via condvar
+                        } else {
+                            // IPC fallback only when no GPU renderer
+                            let packet = encode_image_update_packet(
+                                &image,
+                                &updated_regions,
+                                &mut self.frame_packet_scratch,
+                            );
+                            if self.send_frame_packet(packet).is_err() {
+                                return DisconnectReason::ConnectionLost;
+                            }
                         }
                     }
 

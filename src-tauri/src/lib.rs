@@ -58,32 +58,36 @@ pub fn run() {
                     let renderer = Arc::new(renderer);
                     app.manage(renderer.clone());
 
-                    // Spawn the render loop
+                    // Spawn render loop on a DEDICATED OS thread (not tokio)
+                    // GPU present() blocks for vsync — must not starve the async runtime
                     let r = renderer.clone();
-                    tauri::async_runtime::spawn(async move {
-                        loop {
-                            match r.render() {
-                                Ok(()) => {}
-                                Err(
-                                    wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated,
-                                ) => {
-                                    // Surface needs reconfigure — will happen on next resize event
-                                    log::warn!("Surface lost/outdated, waiting for reconfigure");
-                                    tokio::time::sleep(std::time::Duration::from_millis(16))
-                                        .await;
-                                }
-                                Err(wgpu::SurfaceError::OutOfMemory) => {
-                                    log::error!("GPU out of memory");
-                                    break;
-                                }
-                                Err(e) => {
-                                    log::warn!("Render error: {}", e);
+                    let sf_render = shared_frame.clone();
+                    std::thread::Builder::new()
+                        .name("gpu-render".into())
+                        .spawn(move || {
+                            log::info!("GPU render thread started");
+                            loop {
+                                // Sleep until session actor signals a new frame (via condvar)
+                                // Times out at 100ms to handle resize/surface-lost recovery
+                                sf_render.wait_for_frame(std::time::Duration::from_millis(100));
+
+                                match r.render() {
+                                    Ok(()) => {}
+                                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                                        log::warn!("Surface lost/outdated, waiting for reconfigure");
+                                        std::thread::sleep(std::time::Duration::from_millis(16));
+                                    }
+                                    Err(wgpu::SurfaceError::OutOfMemory) => {
+                                        log::error!("GPU out of memory, stopping render thread");
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Render error: {}", e);
+                                    }
                                 }
                             }
-                            // Yield to let other tasks run
-                            tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-                        }
-                    });
+                        })
+                        .expect("Failed to spawn GPU render thread");
 
                     log::info!("GPU renderer initialized successfully");
                 }
