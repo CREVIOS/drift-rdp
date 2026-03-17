@@ -1,5 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use super::shared_frame::SharedFrame;
 
@@ -21,6 +23,10 @@ pub struct GpuRenderer {
     tex_state: StdMutex<TextureState>,
     sampler: wgpu::Sampler,
     shared_frame: Arc<SharedFrame>,
+    // Performance counters
+    frames_rendered: AtomicU64,
+    last_fps_log: StdMutex<Instant>,
+    last_fps_count: AtomicU64,
 }
 
 impl GpuRenderer {
@@ -162,6 +168,15 @@ impl GpuRenderer {
             cache: None,
         });
 
+        log::info!(
+            "GPU renderer created: adapter={}, format={:?}, present_mode={:?}, size={}x{}",
+            adapter.get_info().name,
+            surface_format,
+            present_mode,
+            size.width,
+            size.height
+        );
+
         Ok(Self {
             device,
             queue,
@@ -177,6 +192,9 @@ impl GpuRenderer {
             }),
             sampler,
             shared_frame,
+            frames_rendered: AtomicU64::new(0),
+            last_fps_log: StdMutex::new(Instant::now()),
+            last_fps_count: AtomicU64::new(0),
         })
     }
 
@@ -191,11 +209,15 @@ impl GpuRenderer {
 
     /// Upload new frame data to the GPU texture if dirty, then render.
     pub fn render(&self) -> Result<(), wgpu::SurfaceError> {
+        let frame_start = Instant::now();
+
         // Publish snapshot (zero-copy swap)
         let snapshot = match self.shared_frame.publish() {
             Some(s) => s,
             None => return Ok(()), // Nothing new — skip entirely
         };
+
+        let publish_time = frame_start.elapsed();
 
         // Single lock for all texture state
         let mut ts = self.tex_state.lock().unwrap();
@@ -290,8 +312,32 @@ impl GpuRenderer {
         // Release texture lock before GPU submit
         drop(ts);
 
+        let pre_submit = frame_start.elapsed();
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+        let total = frame_start.elapsed();
+
+        // FPS counter — log every 5 seconds
+        let count = self.frames_rendered.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut last_log = self.last_fps_log.lock().unwrap();
+        let elapsed = last_log.elapsed();
+        if elapsed.as_secs() >= 5 {
+            let last_count = self.last_fps_count.swap(count, Ordering::Relaxed);
+            let frames_in_period = count - last_count;
+            let fps = frames_in_period as f64 / elapsed.as_secs_f64();
+            log::info!(
+                "[GPU] FPS: {:.1} | frames: {} | frame_time: {:.2}ms (publish: {:.2}ms, upload+draw: {:.2}ms, submit+present: {:.2}ms) | texture: {}x{}",
+                fps,
+                count,
+                total.as_secs_f64() * 1000.0,
+                publish_time.as_secs_f64() * 1000.0,
+                (pre_submit - publish_time).as_secs_f64() * 1000.0,
+                (total - pre_submit).as_secs_f64() * 1000.0,
+                snapshot.width,
+                snapshot.height,
+            );
+            *last_log = Instant::now();
+        }
 
         Ok(())
     }

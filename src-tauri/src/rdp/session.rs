@@ -33,14 +33,20 @@ pub struct PerformanceMetrics {
     pub fps: f64,
     pub latency_ms: u32,
     pub bandwidth_kbps: u32,
+    #[serde(skip)]
+    pub frames_sent: u64,
+    #[serde(skip)]
+    pub started_at: Option<std::time::Instant>,
 }
 
-impl Default for PerformanceMetrics {
-    fn default() -> Self {
+impl PerformanceMetrics {
+    pub fn new() -> Self {
         Self {
             fps: 0.0,
             latency_ms: 15,
             bandwidth_kbps: 0,
+            frames_sent: 0,
+            started_at: Some(std::time::Instant::now()),
         }
     }
 }
@@ -141,7 +147,7 @@ impl SessionActor {
             config,
             password,
             state: SessionState::Connecting,
-            metrics: PerformanceMetrics::default(),
+            metrics: PerformanceMetrics::new(),
             width,
             height,
             connected_at: None,
@@ -558,6 +564,9 @@ impl SessionActor {
                     }
 
                     if !updated_regions.is_empty() {
+                        let rect_start = std::time::Instant::now();
+                        let rect_count = updated_regions.len();
+
                         // Write dirty rects to SharedFrame for GPU renderer (batched — one lock)
                         if let Some(ref sf) = self.shared_frame {
                             use ironrdp::pdu::geometry::Rectangle as _;
@@ -581,6 +590,25 @@ impl SessionActor {
                             }
                             drop(guard);
                             sf.mark_dirty(); // Wakes render thread via condvar
+
+                            let write_time = rect_start.elapsed();
+                            if write_time.as_millis() > 2 {
+                                log::debug!(
+                                    "[Session {}] SharedFrame write: {} rects in {:.2}ms",
+                                    self.id, rect_count, write_time.as_secs_f64() * 1000.0
+                                );
+                            }
+
+                            // Track FPS at the session level
+                            self.metrics.frames_sent += 1;
+                            if self.metrics.frames_sent % 100 == 0 {
+                                let elapsed = self.metrics.started_at.unwrap_or_else(std::time::Instant::now).elapsed();
+                                let fps = self.metrics.frames_sent as f64 / elapsed.as_secs_f64();
+                                log::info!(
+                                    "[Session {}] RDP frames received: {} (avg {:.1} fps) | {} rects this PDU",
+                                    self.id, self.metrics.frames_sent, fps, rect_count
+                                );
+                            }
                         } else {
                             // IPC fallback only when no GPU renderer
                             let packet = encode_image_update_packet(

@@ -65,14 +65,20 @@ pub fn run() {
                     std::thread::Builder::new()
                         .name("gpu-render".into())
                         .spawn(move || {
-                            log::info!("GPU render thread started");
+                            log::info!("[GPU] Render thread started (thread: {:?})", std::thread::current().id());
+                            let mut first_frame = true;
                             loop {
                                 // Sleep until session actor signals a new frame (via condvar)
                                 // Times out at 100ms to handle resize/surface-lost recovery
                                 sf_render.wait_for_frame(std::time::Duration::from_millis(100));
 
                                 match r.render() {
-                                    Ok(()) => {}
+                                    Ok(()) => {
+                                        if first_frame {
+                                            log::info!("[GPU] First frame rendered successfully!");
+                                            first_frame = false;
+                                        }
+                                    }
                                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                                         log::warn!("Surface lost/outdated, waiting for reconfigure");
                                         std::thread::sleep(std::time::Duration::from_millis(16));
